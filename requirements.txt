@@ -1,0 +1,20 @@
+# Core
+streamlit==1.41.1
+vanna[chromadb,openai,postgres]==0.7.5
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+pgvector==0.3.6
+
+# LLM providers
+openai==1.59.7
+anthropic==0.42.0
+google-generativeai==0.8.4
+
+# Data & analysis
+pandas==2.2.3
+networkx==3.4.2
+python-dotenv==1.0.1
+
+# Dev utilities
+jupyter==1.1.1
+ipykernel==6.29.5

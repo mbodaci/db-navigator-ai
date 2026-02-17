@@ -1,0 +1,48 @@
+version: "3.9"
+
+services:
+  # PostgreSQL with pgvector - serves triple duty:
+  #   1. Synthetic bank database (mimics MAIB SQL Server)
+  #   2. Application metadata + enriched schema store
+  #   3. Vector store for RAG embeddings via pgvector
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: dbnavigator-postgres
+    environment:
+      POSTGRES_USER: dbnavigator
+      POSTGRES_PASSWORD: dbnavigator_dev
+      POSTGRES_DB: dbnavigator
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/01_create_bank_schema.sql:/docker-entrypoint-initdb.d/01_create_bank_schema.sql
+      - ./scripts/02_seed_bank_data.sql:/docker-entrypoint-initdb.d/02_seed_bank_data.sql
+      - ./scripts/03_create_app_schema.sql:/docker-entrypoint-initdb.d/03_create_app_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dbnavigator"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dbnavigator-ui
+    ports:
+      - "8501:8501"
+    environment:
+      - DATABASE_URL=postgresql://dbnavigator:dbnavigator_dev@postgres:5432/dbnavigator
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    volumes:
+      - ./app:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: streamlit run /app/streamlit_app.py --server.port=8501 --server.address=0.0.0.0
+
+volumes:
+  pgdata:
