@@ -9,3 +9,11 @@ build/
 .ipynb_checkpoints/
 /pgdata/
 /chroma_data/
+# ChromaDB local data
+app/chroma.sqlite3
+app/*/length.bin
+app/*/data_level0.bin
+app/*/header.bin
+app/*/link_lists.bin
+
+scripts/*_fixed.sql

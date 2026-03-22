@@ -1,10 +1,26 @@
 version: "3.9"
 
 services:
-  # PostgreSQL with pgvector - serves triple duty:
-  #   1. Synthetic bank database (mimics MAIB SQL Server)
-  #   2. Application metadata + enriched schema store
-  #   3. Vector store for RAG embeddings via pgvector
+  # MS SQL Server - bank database (source)
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: dbnavigator-mssql
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "DbNav2026!"
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssqldata:/var/opt/mssql
+    healthcheck:
+      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "DbNav2026!" -C -Q "SELECT 1" -b
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # PostgreSQL + pgvector - enrichment metadata, embeddings, app data (target)
   postgres:
     image: pgvector/pgvector:pg16
     container_name: dbnavigator-postgres
@@ -16,15 +32,14 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./scripts/01_create_bank_schema.sql:/docker-entrypoint-initdb.d/01_create_bank_schema.sql
-      - ./scripts/02_seed_bank_data.sql:/docker-entrypoint-initdb.d/02_seed_bank_data.sql
-      - ./scripts/03_create_app_schema.sql:/docker-entrypoint-initdb.d/03_create_app_schema.sql
+      - ./scripts/03_create_app_schema.sql:/docker-entrypoint-initdb.d/01_create_app_schema.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dbnavigator"]
       interval: 5s
       timeout: 5s
       retries: 5
 
+  # Streamlit UI
   streamlit:
     build:
       context: .
@@ -33,16 +48,21 @@ services:
     ports:
       - "8501:8501"
     environment:
+      - MSSQL_URL=mssql+pyodbc://sa:DbNav2026!@mssql:1433/dbnavigator?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes
       - DATABASE_URL=postgresql://dbnavigator:dbnavigator_dev@postgres:5432/dbnavigator
+      - BANK_SCHEMA=bank
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
     volumes:
       - ./app:/app
     depends_on:
+      mssql:
+        condition: service_healthy
       postgres:
         condition: service_healthy
     command: streamlit run /app/streamlit_app.py --server.port=8501 --server.address=0.0.0.0
 
 volumes:
   pgdata:
+  mssqldata:
