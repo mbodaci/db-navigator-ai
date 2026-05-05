@@ -48,7 +48,7 @@ services:
     ports:
       - "8501:8501"
     environment:
-      - MSSQL_URL=mssql+pyodbc://sa:DbNav2026!@mssql:1433/dbnavigator?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes
+      - SOURCE_DATABASE_URL=mssql+pyodbc://sa:DbNav2026!@mssql:1433/dbnavigator?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes
       - DATABASE_URL=postgresql://dbnavigator:dbnavigator_dev@postgres:5432/dbnavigator
       - BANK_SCHEMA=bank
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}

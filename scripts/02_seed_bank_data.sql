@@ -5,6 +5,7 @@
 -- ============================================================
 
 -- Branches
+SET IDENTITY_INSERT bank.tbl_br ON;
 INSERT INTO bank.tbl_br (br_cd, br_nm, br_addr, br_city, br_region, br_mgr_emp_no, open_dt, stat_cd) VALUES
 ('BR001', 'Filiala Centrala', 'Bd. Stefan cel Mare 180', 'Chisinau', 'Chisinau', 'E001', '1991-06-15', 1),
 ('BR002', 'Filiala Botanica', 'Str. Decebal 78', 'Chisinau', 'Chisinau', 'E005', '1995-03-20', 1),
@@ -15,6 +16,7 @@ INSERT INTO bank.tbl_br (br_cd, br_nm, br_addr, br_city, br_region, br_mgr_emp_n
 ('BR007', 'Filiala Comrat', 'Str. Pobedei 30', 'Comrat', 'Gagauzia', 'E022', '2010-03-01', 1);
 
 -- Employees (25 employees across branches)
+SET IDENTITY_INSERT bank.tbl_emp ON;
 INSERT INTO bank.tbl_emp (emp_no, emp_nm, emp_surnm, emp_pos, br_cd, dept_cd, hire_dt, term_dt, mgr_emp_no, sal_amt, stat_cd) VALUES
 ('E001', 'Ion', 'Munteanu', 'Director Filiala', 'BR001', 'MGMT', '1995-01-15', NULL, NULL, 45000.00, 1),
 ('E002', 'Maria', 'Popescu', 'Specialist Credite Senior', 'BR001', 'CREDIT', '2000-03-01', NULL, 'E001', 28000.00, 1),
@@ -43,34 +45,37 @@ INSERT INTO bank.tbl_emp (emp_no, emp_nm, emp_surnm, emp_pos, br_cd, dept_cd, hi
 ('E025', 'Nicolae', 'Vrabie', 'Specialist Credite Junior', 'BR001', 'CREDIT', '2024-01-15', NULL, 'E002', 12000.00, 1);
 
 -- Account types
+SET IDENTITY_INSERT bank.tbl_acct_t ON;
 INSERT INTO bank.tbl_acct_tp (acct_tp_cd, acct_tp_nm, acct_tp_desc, ccy_cd, is_active) VALUES
-('CUR_PF', 'Cont Curent PF', 'Cont curent pentru persoane fizice', 'MDL', TRUE),
-('CUR_PJ', 'Cont Curent PJ', 'Cont curent pentru persoane juridice', 'MDL', TRUE),
-('DEP_TRM', 'Depozit la Termen', 'Depozit cu termen fix', 'MDL', TRUE),
-('DEP_VED', 'Depozit la Vedere', 'Depozit fara termen fix', 'MDL', TRUE),
-('SAV', 'Cont Economii', 'Cont de economii cu dobanda', 'MDL', TRUE),
-('CRD_LN', 'Cont Credit', 'Cont asociat unui credit', 'MDL', TRUE),
-('CUR_USD', 'Cont Curent USD', 'Cont curent in dolari', 'USD', TRUE),
-('CUR_EUR', 'Cont Curent EUR', 'Cont curent in euro', 'EUR', TRUE),
-('ESCROW', 'Cont Escrow', 'Cont escrow pentru tranzactii imobiliare', 'MDL', FALSE); -- discontinued
+('CUR_PF', 'Cont Curent PF', 'Cont curent pentru persoane fizice', 'MDL', 1),
+('CUR_PJ', 'Cont Curent PJ', 'Cont curent pentru persoane juridice', 'MDL', 1),
+('DEP_TRM', 'Depozit la Termen', 'Depozit cu termen fix', 'MDL', 1),
+('DEP_VED', 'Depozit la Vedere', 'Depozit fara termen fix', 'MDL', 1),
+('SAV', 'Cont Economii', 'Cont de economii cu dobanda', 'MDL', 1),
+('CRD_LN', 'Cont Credit', 'Cont asociat unui credit', 'MDL', 1),
+('CUR_USD', 'Cont Curent USD', 'Cont curent in dolari', 'USD', 1),
+('CUR_EUR', 'Cont Curent EUR', 'Cont curent in euro', 'EUR', 1),
+('ESCROW', 'Cont Escrow', 'Cont escrow pentru tranzactii imobiliare', 'MDL', 0); -- discontinued
 
 -- Transaction types
+SET IDENTITY_INSERT bank.tbl_txn_tp ON;
 INSERT INTO bank.tbl_txn_tp (txn_tp_cd, txn_tp_nm, txn_tp_desc, dr_cr_ind, is_active) VALUES
-('DEP_CSH', 'Depunere Numerar', 'Depunere numerar la ghiseu', 'C', TRUE),
-('WDR_CSH', 'Retragere Numerar', 'Retragere numerar la ghiseu sau ATM', 'D', TRUE),
-('TRF_INT', 'Transfer Intern', 'Transfer intre conturi MAIB', 'D', TRUE),
-('TRF_EXT', 'Transfer Extern', 'Transfer catre alta banca', 'D', TRUE),
-('TRF_IN', 'Transfer Primit', 'Transfer primit de la alta banca', 'C', TRUE),
-('PMT_LN', 'Plata Credit', 'Plata rata credit', 'D', TRUE),
-('DISB_LN', 'Disbursare Credit', 'Eliberare credit in cont', 'C', TRUE),
-('FEE', 'Comision', 'Comision bancar', 'D', TRUE),
-('INT_DEP', 'Dobanda Depozit', 'Dobanda acumulata la depozit', 'C', TRUE),
-('POS', 'Plata POS', 'Plata prin terminal POS', 'D', TRUE),
-('ATM_WDR', 'Retragere ATM', 'Retragere de la bancomat', 'D', TRUE),
-('FX_BUY', 'Cumparare Valuta', 'Operatiune de cumparare valuta', 'D', TRUE),
-('FX_SELL', 'Vanzare Valuta', 'Operatiune de vanzare valuta', 'C', TRUE);
+('DEP_CSH', 'Depunere Numerar', 'Depunere numerar la ghiseu', 'C', 1),
+('WDR_CSH', 'Retragere Numerar', 'Retragere numerar la ghiseu sau ATM', 'D', 1),
+('TRF_INT', 'Transfer Intern', 'Transfer intre conturi MAIB', 'D', 1),
+('TRF_EXT', 'Transfer Extern', 'Transfer catre alta banca', 'D', 1),
+('TRF_IN', 'Transfer Primit', 'Transfer primit de la alta banca', 'C', 1),
+('PMT_LN', 'Plata Credit', 'Plata rata credit', 'D', 1),
+('DISB_LN', 'Disbursare Credit', 'Eliberare credit in cont', 'C', 1),
+('FEE', 'Comision', 'Comision bancar', 'D', 1),
+('INT_DEP', 'Dobanda Depozit', 'Dobanda acumulata la depozit', 'C', 1),
+('POS', 'Plata POS', 'Plata prin terminal POS', 'D', 1),
+('ATM_WDR', 'Retragere ATM', 'Retragere de la bancomat', 'D', 1),
+('FX_BUY', 'Cumparare Valuta', 'Operatiune de cumparare valuta', 'D', 1),
+('FX_SELL', 'Vanzare Valuta', 'Operatiune de vanzare valuta', 'C', 1);
 
 -- Customers (20 customers - mix of PF and PJ, various statuses)
+SET IDENTITY_INSERT bank.tbl_cust ON;
 INSERT INTO bank.tbl_cust (cust_no, cust_tp, cust_nm, idnp, idno, birth_dt, gender_cd, phone_no, email_addr, reg_dt, br_cd, risk_categ, stat_cd) VALUES
 ('C00001', 'PF', 'Petru Costin',       '2003456789012', NULL, '1985-03-15', 'M', '+37369123456', 'p.costin@mail.md',     '2015-01-20', 'BR001', 'LOW',  'ACTIVE'),
 ('C00002', 'PF', 'Alina Dumbraveanu',  '2003456789013', NULL, '1990-07-22', 'F', '+37368234567', 'a.dumbr@mail.md',      '2016-05-10', 'BR001', 'LOW',  'ACTIVE'),
@@ -94,6 +99,7 @@ INSERT INTO bank.tbl_cust (cust_no, cust_tp, cust_nm, idnp, idno, birth_dt, gend
 ('C00020', 'PF', 'Victoria Tautu',     '2003456789025', NULL, '2000-02-14', 'F', '+37369012345', 'v.tautu@mail.md',       '2024-06-01', 'BR001', 'LOW',  'ACTIVE');
 
 -- Accounts (30 accounts across customers - some have multiple)
+SET IDENTITY_INSERT bank.tbl_acct ON;
 INSERT INTO bank.tbl_acct (acct_no, cust_no, acct_tp_cd, ccy_cd, br_cd, open_dt, close_dt, cur_bal, avail_bal, hold_amt, stat_cd, last_txn_dt) VALUES
 ('MD24AG000000000001MDL', 'C00001', 'CUR_PF',  'MDL', 'BR001', '2015-01-20', NULL,         45230.50,  44230.50, 1000.00, 'OPEN',    '2026-02-10'),
 ('MD24AG000000000002USD', 'C00001', 'CUR_USD', 'USD', 'BR001', '2018-06-15', NULL,          3250.00,   3250.00,    0.00, 'OPEN',    '2026-01-28'),
@@ -127,19 +133,21 @@ INSERT INTO bank.tbl_acct (acct_no, cust_no, acct_tp_cd, ccy_cd, br_cd, open_dt,
 ('MD24AG000000000030MDL', 'C00020', 'CUR_PF',  'MDL', 'BR001', '2024-06-01', NULL,          2100.00,   2100.00,    0.00, 'OPEN',    '2026-01-30');
 
 -- Loan products
+SET IDENTITY_INSERT bank.tbl_loan_prod ON;
 INSERT INTO bank.tbl_loan_prod (prod_cd, prod_nm, prod_categ, min_amt, max_amt, min_term_mo, max_term_mo, base_rate, is_active) VALUES
-('MORT_STD',  'Ipoteca Standard',      'MORTGAGE', 200000.00,  5000000.00,  60, 300, 9.50, TRUE),
-('MORT_PRM',  'Ipoteca Prima Casa',    'MORTGAGE', 100000.00,  2000000.00,  60, 240, 7.00, TRUE),
-('CONS_STD',  'Credit Consum',         'CONSUMER',   5000.00,   300000.00,   6,  84, 14.50, TRUE),
-('CONS_SAL',  'Credit Salarial',       'CONSUMER',   1000.00,   100000.00,   3,  60, 12.00, TRUE),
-('AUTO_NEW',  'Credit Auto Nou',       'AUTO',      50000.00,  1500000.00,  12,  84, 10.50, TRUE),
-('AUTO_SH',   'Credit Auto SH',        'AUTO',      30000.00,   800000.00,  12,  60, 13.00, TRUE),
-('BIZ_INV',   'Credit Investitional',  'BUSINESS', 100000.00, 20000000.00,  12, 120, 11.00, TRUE),
-('BIZ_WC',    'Credit Capital Circ.',  'BUSINESS',  50000.00, 10000000.00,   3,  36, 12.50, TRUE),
-('BIZ_AGRO',  'Credit Agricol',        'BUSINESS', 100000.00, 15000000.00,  12,  84,  9.00, TRUE),
-('OVERDRAFT', 'Overdraft',             'CONSUMER',   5000.00,   200000.00,   1,  12, 16.00, TRUE);
+('MORT_STD',  'Ipoteca Standard',      'MORTGAGE', 200000.00,  5000000.00,  60, 300, 9.50, 1),
+('MORT_PRM',  'Ipoteca Prima Casa',    'MORTGAGE', 100000.00,  2000000.00,  60, 240, 7.00, 1),
+('CONS_STD',  'Credit Consum',         'CONSUMER',   5000.00,   300000.00,   6,  84, 14.50, 1),
+('CONS_SAL',  'Credit Salarial',       'CONSUMER',   1000.00,   100000.00,   3,  60, 12.00, 1),
+('AUTO_NEW',  'Credit Auto Nou',       'AUTO',      50000.00,  1500000.00,  12,  84, 10.50, 1),
+('AUTO_SH',   'Credit Auto SH',        'AUTO',      30000.00,   800000.00,  12,  60, 13.00, 1),
+('BIZ_INV',   'Credit Investitional',  'BUSINESS', 100000.00, 20000000.00,  12, 120, 11.00, 1),
+('BIZ_WC',    'Credit Capital Circ.',  'BUSINESS',  50000.00, 10000000.00,   3,  36, 12.50, 1),
+('BIZ_AGRO',  'Credit Agricol',        'BUSINESS', 100000.00, 15000000.00,  12,  84,  9.00, 1),
+('OVERDRAFT', 'Overdraft',             'CONSUMER',   5000.00,   200000.00,   1,  12, 16.00, 1);
 
 -- Loans (12 loans - mix of statuses, some overdue, one NPL)
+SET IDENTITY_INSERT bank.tbl_loan ON;
 INSERT INTO bank.tbl_loan (loan_no, cust_no, prod_cd, disb_acct_no, repay_acct_no, appl_dt, appr_dt, disb_dt, mat_dt, loan_amt, ccy_cd, int_rate, term_mo, outst_princ, outst_int, overdue_amt, overdue_days, npl_flag, br_cd, loan_off_emp_no, stat_cd) VALUES
 ('LN-2023-00001', 'C00001', 'MORT_PRM',  'MD24AG000000000001MDL', 'MD24AG000000000001MDL', '2023-01-10', '2023-01-25', '2023-02-01', '2043-02-01', 1200000.00, 'MDL', 7.25, 240, 1125000.00, 4500.00, 0.00, 0, 'N', 'BR001', 'E002', 'ACTIVE'),
 ('LN-2023-00002', 'C00004', 'CONS_STD',   'MD24AG000000000008MDL', 'MD24AG000000000007MDL', '2023-02-15', '2023-02-20', '2023-03-01', '2028-03-01', 150000.00,  'MDL', 14.50, 60,  98000.00, 1200.00, 0.00, 0, 'N', 'BR002', 'E006', 'ACTIVE'),
@@ -155,6 +163,7 @@ INSERT INTO bank.tbl_loan (loan_no, cust_no, prod_cd, disb_acct_no, repay_acct_n
 ('LN-2020-00012', 'C00016', 'CONS_STD',   'MD24AG000000000024MDL', 'MD24AG000000000024MDL', '2020-06-01', '2020-06-05', '2020-06-15', '2025-06-15', 100000.00,  'MDL', 15.00, 60,   32000.00, 12000.00, 44000.00, 180, 'Y', 'BR003', 'E011', 'ACTIVE');  -- NPL, account frozen
 
 -- Sample transactions (50 transactions for testing)
+SET IDENTITY_INSERT bank.tbl_txn ON;
 INSERT INTO bank.tbl_txn (acct_no, txn_tp_cd, txn_dt, val_dt, txn_amt, ccy_cd, dr_cr_ind, bal_after, ref_no, cntrp_acct_no, cntrp_nm, descr, channel_cd, auth_emp_no, stat_cd) VALUES
 ('MD24AG000000000001MDL', 'DEP_CSH',  '2026-02-01', '2026-02-01', 15000.00,  'MDL', 'C', 40230.50, 'REF2026020101', NULL, NULL, 'Depunere salariu', 'BRANCH', 'E004', 'POST'),
 ('MD24AG000000000001MDL', 'PMT_LN',   '2026-02-01', '2026-02-01',  6200.00,  'MDL', 'D', 34030.50, 'REF2026020102', 'MD24AG000000000001MDL', 'MAIB Credit', 'Plata rata credit ipotecar LN-2023-00001', 'WEB', NULL, 'POST'),
@@ -210,6 +219,7 @@ INSERT INTO bank.tbl_txn (acct_no, txn_tp_cd, txn_dt, val_dt, txn_amt, ccy_cd, d
 ('MD24AG000000000026MDL', 'TRF_IN',   '2026-02-14', '2026-02-14',250000.00,  'MDL', 'C', 890000.00,'REF2026021405', 'MD99XX000000666555', 'AgriExport Moldova', 'Livrare cereale contract C-2026-01', 'WEB', NULL, 'POST');
 
 -- Cards (10 cards)
+SET IDENTITY_INSERT bank.tbl_card ON;
 INSERT INTO bank.tbl_card (card_no_hash, acct_no, cust_no, card_tp, card_brand, issue_dt, exp_dt, lim_amt, stat_cd) VALUES
 ('a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2', 'MD24AG000000000001MDL', 'C00001', 'DEBIT', 'VISA',       '2024-01-15', '2027-01-15', NULL, 'ACTIVE'),
 ('b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3', 'MD24AG000000000001MDL', 'C00001', 'CREDIT','VISA',       '2023-06-01', '2026-06-01', 50000.00, 'ACTIVE'),
@@ -223,6 +233,7 @@ INSERT INTO bank.tbl_card (card_no_hash, acct_no, cust_no, card_tp, card_brand, 
 ('d1d2d3d4d5d6d1d2d3d4d5d6d1d2d3d4d5d6d1d2d3d4d5d6d1d2d3d4d5d6d1d2', 'MD24AG000000000025MDL', 'C00017', 'DEBIT', 'VISA',       '2024-11-01', '2027-11-01', NULL, 'ACTIVE');
 
 -- Collateral
+SET IDENTITY_INSERT bank.tbl_coll ON;
 INSERT INTO bank.tbl_coll (loan_no, coll_tp, coll_desc, appraisal_val, appraisal_dt, ccy_cd, stat_cd) VALUES
 ('LN-2023-00001', 'REAL_ESTATE', 'Apartament 3 camere, Chisinau, Botanica, 75mp', 1800000.00, '2023-01-15', 'MDL', 'ACTIVE'),
 ('LN-2022-00003', 'EQUIPMENT',   'Linie productie piese auto, an fabric. 2021',   3500000.00, '2022-05-10', 'MDL', 'ACTIVE'),
@@ -235,6 +246,7 @@ INSERT INTO bank.tbl_coll (loan_no, coll_tp, coll_desc, appraisal_val, appraisal
 ('LN-2025-00011', 'EQUIPMENT',   'Parc utilaje agricole (3 tractoare, 2 combine)', 5500000.00, '2025-01-15', 'MDL', 'ACTIVE');
 
 -- Guarantors
+SET IDENTITY_INSERT bank.tbl_guar ON;
 INSERT INTO bank.tbl_guar (loan_no, guar_cust_no, guar_nm, guar_idnp, guar_tp, guar_amt, stat_cd) VALUES
 ('LN-2023-00001', 'C00002', 'Alina Dumbraveanu',  '2003456789013', 'PF', 1200000.00, 'ACTIVE'),
 ('LN-2023-00002', NULL,      'Vasile Bostan',       '2003456780001', 'PF',  150000.00, 'ACTIVE'),
@@ -243,6 +255,7 @@ INSERT INTO bank.tbl_guar (loan_no, guar_cust_no, guar_nm, guar_idnp, guar_tp, g
 ('LN-2024-00010', 'C00018', 'SRL AgriMold',        NULL,             'PJ', 3500000.00, 'ACTIVE');
 
 -- FX Rates (last 5 days)
+SET IDENTITY_INSERT bank.tbl_fx_rate ON;
 INSERT INTO bank.tbl_fx_rate (rate_dt, ccy_from, ccy_to, buy_rate, sell_rate, bnm_rate) VALUES
 ('2026-02-10', 'USD', 'MDL', 17.65, 17.85, 17.75),
 ('2026-02-10', 'EUR', 'MDL', 19.20, 19.45, 19.32),
@@ -261,14 +274,15 @@ INSERT INTO bank.tbl_fx_rate (rate_dt, ccy_from, ccy_to, buy_rate, sell_rate, bn
 ('2026-02-14', 'RON', 'MDL',  3.88,  3.98,  3.93);
 
 -- Customer addresses (sample)
+SET IDENTITY_INSERT bank.tbl_cust_addr ON;
 INSERT INTO bank.tbl_cust_addr (cust_no, addr_tp, addr_line1, addr_line2, city, region, postal_cd, country_cd, is_primary) VALUES
-('C00001', 'HOME', 'Str. Alba Iulia 75', 'ap. 42',  'Chisinau', 'Chisinau', 'MD-2051', 'MDA', TRUE),
-('C00001', 'WORK', 'Bd. Stefan cel Mare 180', NULL,  'Chisinau', 'Chisinau', 'MD-2004', 'MDA', FALSE),
-('C00002', 'HOME', 'Str. Ismail 48', 'ap. 15',      'Chisinau', 'Chisinau', 'MD-2001', 'MDA', TRUE),
-('C00003', 'REG',  'Str. Industriala 22', NULL,       'Chisinau', 'Chisinau', 'MD-2023', 'MDA', TRUE),
-('C00004', 'HOME', 'Str. Decebal 120', 'ap. 8',     'Chisinau', 'Chisinau', 'MD-2060', 'MDA', TRUE),
-('C00005', 'HOME', 'Str. Grenoble 128', 'ap. 33',   'Chisinau', 'Chisinau', 'MD-2019', 'MDA', TRUE),
-('C00006', 'REG',  'Sat. Purcari, com. Stefan Voda', NULL, 'Stefan Voda', 'Stefan Voda', 'MD-4201', 'MDA', TRUE),
-('C00007', 'HOME', 'Str. Independentei 88', 'ap. 5', 'Balti',   'Balti',    'MD-3100', 'MDA', TRUE),
-('C00013', 'HOME', 'Str. Bucuresti 55', 'ap. 21',   'Chisinau', 'Chisinau', 'MD-2012', 'MDA', TRUE),
-('C00014', 'HOME', 'Str. Pobedei 15', NULL,          'Comrat',   'Gagauzia',  'MD-3805', 'MDA', TRUE);
+('C00001', 'HOME', 'Str. Alba Iulia 75', 'ap. 42',  'Chisinau', 'Chisinau', 'MD-2051', 'MDA', 1),
+('C00001', 'WORK', 'Bd. Stefan cel Mare 180', NULL,  'Chisinau', 'Chisinau', 'MD-2004', 'MDA', 0),
+('C00002', 'HOME', 'Str. Ismail 48', 'ap. 15',      'Chisinau', 'Chisinau', 'MD-2001', 'MDA', 1),
+('C00003', 'REG',  'Str. Industriala 22', NULL,       'Chisinau', 'Chisinau', 'MD-2023', 'MDA', 1),
+('C00004', 'HOME', 'Str. Decebal 120', 'ap. 8',     'Chisinau', 'Chisinau', 'MD-2060', 'MDA', 1),
+('C00005', 'HOME', 'Str. Grenoble 128', 'ap. 33',   'Chisinau', 'Chisinau', 'MD-2019', 'MDA', 1),
+('C00006', 'REG',  'Sat. Purcari, com. Stefan Voda', NULL, 'Stefan Voda', 'Stefan Voda', 'MD-4201', 'MDA', 1),
+('C00007', 'HOME', 'Str. Independentei 88', 'ap. 5', 'Balti',   'Balti',    'MD-3100', 'MDA', 1),
+('C00013', 'HOME', 'Str. Bucuresti 55', 'ap. 21',   'Chisinau', 'Chisinau', 'MD-2012', 'MDA', 1),
+('C00014', 'HOME', 'Str. Pobedei 15', NULL,          'Comrat',   'Gagauzia',  'MD-3805', 'MDA', 1);

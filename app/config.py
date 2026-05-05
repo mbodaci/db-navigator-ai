@@ -13,12 +13,12 @@ load_dotenv()
 # Source database (MS SQL Server - the bank DB you're enriching)
 # ---------------------------------------------------------------------------
 # Connection string format for pyodbc:
-#   mssql+pyodbc://user:password@server/database?driver=ODBC+Driver+17+for+SQL+Server
+#   mssql+pyodbc://user:password@server/database?driver=ODBC+Driver+18+for+SQL+Server
 # Connection string format for pymssql:
 #   mssql+pymssql://user:password@server/database
 SOURCE_DATABASE_URL = os.getenv(
     "SOURCE_DATABASE_URL",
-    "mssql+pyodbc://sa:YourPassword@localhost/bankdb?driver=ODBC+Driver+17+for+SQL+Server"
+    "mssql+pyodbc://sa:DbNav2026!@localhost:1433/dbnavigator?driver=ODBC+Driver+18+for+SQL+Server"
 )
 BANK_SCHEMA = os.getenv("BANK_SCHEMA", "bank")
 
