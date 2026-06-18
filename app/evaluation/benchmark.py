@@ -86,6 +86,7 @@ class BenchmarkSummary:
     voting_n: int = 0
     mean_confidence: Optional[float] = None
     join_paths_enabled: bool = False
+    value_check_enabled: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +474,7 @@ class BenchmarkRunner:
         voting_n: int = 5,
         voting_temperature: float = 0.7,
         join_paths: bool = False,
+        value_check: bool = False,
     ):
         self._source = create_engine(source_url)
         self._target = create_engine(target_url)
@@ -488,6 +490,8 @@ class BenchmarkRunner:
         self._voting_temperature = voting_temperature
         self._join_paths = join_paths
         self._join_validator = self._build_join_validator() if join_paths else None
+        self._value_check = value_check
+        self._value_validator = self._build_value_index() if value_check else None
 
     def list_benchmarks(self) -> pd.DataFrame:
         with self._target.connect() as conn:
@@ -648,6 +652,53 @@ class BenchmarkRunner:
                 repaired = True
         return sql, repaired
 
+    def _build_value_index(self):
+        """Build a value-domain validator from column cardinalities + source data.
+
+        Reads the distinct-count metadata in public.enriched_columns to pick the
+        low-cardinality coded columns, pulls their actual distinct values from the
+        source DB, and attaches the hand-authored opaque-code labels. Measured in
+        isolation: the index is built from the database itself, not from any LLM
+        output. Imported lazily.
+        """
+        from app.pipeline.value_index import (
+            build_value_index, make_source_fetch, SYNTHETIC_DB_VALUE_LABELS,
+        )
+        from app.pipeline.value_validator import ValueValidator
+
+        with self._target.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT table_name, column_name, distinct_count
+                FROM public.enriched_columns
+                WHERE schema_name = :schema AND distinct_count IS NOT NULL
+            """), {"schema": self._schema}).fetchall()
+        columns = [(r[0], r[1], r[2]) for r in rows]
+
+        index = build_value_index(
+            columns,
+            make_source_fetch(self._source, self._schema),
+            label_map=SYNTHETIC_DB_VALUE_LABELS,
+        )
+        logger.info("value-domain index built over %d columns", len(index))
+        return ValueValidator(index, dialect="tsql")
+
+    def _run_value_check(self, vn, question_text: str):
+        """Generate, validate literal values, and re-prompt with the real domain.
+
+        Returns ``(sql, repaired)``. A single value-repair re-prompt at most.
+        """
+        raw = vn.generate_sql(question=question_text)
+        sql = _fix_tsql(raw) if raw and raw.strip() else None
+        repaired = False
+        if sql and self._value_validator is not None:
+            check = self._value_validator.validate(sql)
+            if not check.ok and check.hint:
+                raw2 = vn.generate_sql(question=f"{question_text}\n\n{check.hint}")
+                if raw2 and raw2.strip():
+                    sql = _fix_tsql(raw2)
+                repaired = True
+        return sql, repaired
+
     def _evaluate_one(self, vn, question: dict) -> QueryResult:
         qr = QueryResult(
             question_id=question["id"],
@@ -673,6 +724,17 @@ class BenchmarkRunner:
         elif self._join_paths:
             try:
                 sql, repaired = self._run_join_paths(vn, question["question"])
+                qr.generated_sql = sql
+                qr.correction_iters = 1 if repaired else 0
+            except Exception as e:
+                qr.error_type = "generation_failed"
+                qr.error_detail = str(e)[:200]
+                qr.latency_ms = int((time.perf_counter() - t0) * 1000)
+                return qr
+            qr.latency_ms = int((time.perf_counter() - t0) * 1000)
+        elif self._value_check:
+            try:
+                sql, repaired = self._run_value_check(vn, question["question"])
                 qr.generated_sql = sql
                 qr.correction_iters = 1 if repaired else 0
             except Exception as e:
@@ -820,6 +882,7 @@ class BenchmarkRunner:
 
         # Join-path stats (re-uses correction_iters to count join repairs)
         summary.join_paths_enabled = self._join_paths
+        summary.value_check_enabled = self._value_check
 
         return summary
 
@@ -853,6 +916,11 @@ def print_summary(summary: BenchmarkSummary):
     if summary.join_paths_enabled:
         print("Join-path validation:")
         print(f"  queries re-prompted with an FK path: {summary.corrected_count}/{summary.total}")
+        print()
+
+    if summary.value_check_enabled:
+        print("Value-domain validation:")
+        print(f"  queries re-prompted with the real value domain: {summary.corrected_count}/{summary.total}")
         print()
 
     if summary.by_difficulty:
@@ -926,6 +994,8 @@ if __name__ == "__main__":
                         help="Sampling temperature for voting candidates (default 0.7)")
     parser.add_argument("--join-paths", action="store_true",
                         help="Enable FK join-path validation and repair")
+    parser.add_argument("--value-check", action="store_true",
+                        help="Enable value-domain validation and repair")
     args = parser.parse_args()
 
     # Try config import (works under `python -m app.evaluation.benchmark`
@@ -961,6 +1031,7 @@ if __name__ == "__main__":
         voting_n=args.voting_n,
         voting_temperature=args.voting_temperature,
         join_paths=args.join_paths,
+        value_check=args.value_check,
     )
 
     if args.list:

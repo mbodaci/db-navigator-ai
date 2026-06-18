@@ -14,6 +14,7 @@ Environment variables:
     DBNAV_VOTING_N                 int    candidate count for voting (default 5)
     DBNAV_VOTING_TEMPERATURE       float  candidate sampling temperature (default 0.7)
     DBNAV_JOIN_PATHS               bool   enable FK join-path validation and repair
+    DBNAV_VALUE_CHECK              bool   enable value-domain validation and repair
 """
 import os
 from dataclasses import dataclass
@@ -64,6 +65,8 @@ class PipelineConfig:
 
     join_paths: bool = False
 
+    value_check: bool = False
+
     @classmethod
     def from_env(cls) -> "PipelineConfig":
         return cls(
@@ -75,6 +78,7 @@ class PipelineConfig:
             voting_n=_env_int("DBNAV_VOTING_N", 5),
             voting_temperature=_env_float("DBNAV_VOTING_TEMPERATURE", 0.7),
             join_paths=_env_bool("DBNAV_JOIN_PATHS", False),
+            value_check=_env_bool("DBNAV_VALUE_CHECK", False),
         )
 
     def merged_with(self, **overrides) -> "PipelineConfig":
@@ -93,6 +97,7 @@ class PipelineConfig:
             "voting_n": self.voting_n,
             "voting_temperature": self.voting_temperature,
             "join_paths": self.join_paths,
+            "value_check": self.value_check,
         }
         for key, value in overrides.items():
             if value is not None and key in data:

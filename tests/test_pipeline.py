@@ -27,6 +27,8 @@ from pipeline.engine import FeatureNotEnabledError, NLToSQLEngine
 from pipeline.flags import PipelineConfig
 from pipeline.join_paths import JoinPathEngine, JoinStep
 from pipeline.join_validator import JoinValidator, ValidationResult
+from pipeline.value_index import build_value_index
+from pipeline.value_validator import ValueValidator
 from pipeline.self_correction import SelfCorrectionLoop
 from pipeline.voting import SelfConsistencyVoter
 from pipeline import sql_utils
@@ -250,7 +252,7 @@ def test_repair_temperature_pinned_then_restored():
 # --------------------------------------------------------------------------- #
 # Engine
 # --------------------------------------------------------------------------- #
-def make_engine(vn, executor, config, join_validator=None):
+def make_engine(vn, executor, config, join_validator=None, value_validator=None):
     return NLToSQLEngine(
         vn=vn,
         execute_fn=executor,
@@ -258,6 +260,7 @@ def make_engine(vn, executor, config, join_validator=None):
         dialect="mssql",
         config=config,
         join_validator=join_validator,
+        value_validator=value_validator,
     )
 
 
@@ -342,6 +345,51 @@ def test_engine_join_paths_without_validator_falls_back():
     vn = FakeVanna(gen=["SELECT good FROM t"])
     ex = RecordingExecutor([(df_rows(), None)])
     res = make_engine(vn, ex, PipelineConfig(join_paths=True)).answer("q")
+    assert res.mode == "baseline"  # flag on but no validator injected -> baseline path
+
+
+def _value_validator():
+    idx = build_value_index(
+        [("tbl_acct", "stat_cd", 2)],
+        lambda t, c: ["OPEN", "CLOSED"],
+        label_map={("tbl_acct", "stat_cd"): {"OPEN": ["active", "open"]}},
+    )
+    return ValueValidator(idx, dialect="tsql")
+
+
+def test_engine_value_check_repairs_bad_value():
+    # First generation filters on a non-existent code; the validator flags it and
+    # the engine re-prompts, the second generation uses the real code.
+    bad = "SELECT * FROM bank.tbl_acct WHERE stat_cd = 'ACTIVE'"
+    good = "SELECT * FROM bank.tbl_acct WHERE stat_cd = 'OPEN'"
+    vn = FakeVanna(gen=[bad, good])
+    ex = SqlExecutor({good: (pd.DataFrame({"x": [1]}), None)})
+    cfg = PipelineConfig(value_check=True)
+    res = make_engine(vn, ex, cfg, value_validator=_value_validator()).answer("q")
+
+    assert res.mode == "value_check"
+    assert res.was_corrected is True
+    assert res.correction_iterations == 1
+    assert res.sql == good
+    assert res.executed_ok is True
+
+
+def test_engine_value_check_accepts_valid_value():
+    sql = "SELECT * FROM bank.tbl_acct WHERE stat_cd = 'OPEN'"
+    vn = FakeVanna(gen=[sql])
+    ex = SqlExecutor({sql: (pd.DataFrame({"x": [1]}), None)})
+    res = make_engine(vn, ex, PipelineConfig(value_check=True),
+                      value_validator=_value_validator()).answer("q")
+
+    assert res.mode == "value_check"
+    assert res.was_corrected is False
+    assert res.sql == sql  # no re-prompt: only one generation consumed
+
+
+def test_engine_value_check_without_validator_falls_back():
+    vn = FakeVanna(gen=["SELECT good FROM t"])
+    ex = RecordingExecutor([(df_rows(), None)])
+    res = make_engine(vn, ex, PipelineConfig(value_check=True)).answer("q")
     assert res.mode == "baseline"  # flag on but no validator injected -> baseline path
 
 
