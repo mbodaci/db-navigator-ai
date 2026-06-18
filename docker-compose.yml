@@ -63,6 +63,36 @@ services:
         condition: service_healthy
     command: streamlit run /app/streamlit_app.py --server.port=8501 --server.address=0.0.0.0
 
+  # FastAPI service - programmatic access + self-correction loop
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dbnavigator-api
+    working_dir: /app
+    ports:
+      - "8000:8000"
+    environment:
+      - SOURCE_DATABASE_URL=mssql+pyodbc://sa:DbNav2026!@mssql:1433/dbnavigator?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes
+      - DATABASE_URL=postgresql://dbnavigator:dbnavigator_dev@postgres:5432/dbnavigator
+      - BANK_SCHEMA=bank
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      # Feature flags (all default off -> documented Config F baseline):
+      - DBNAV_SELF_CORRECTION=${DBNAV_SELF_CORRECTION:-false}
+      - DBNAV_SELF_CORRECTION_ITERS=${DBNAV_SELF_CORRECTION_ITERS:-2}
+      - DBNAV_SELF_CORRECTION_RETRY_EMPTY=${DBNAV_SELF_CORRECTION_RETRY_EMPTY:-false}
+      - DBNAV_SELF_CORRECTION_TEMPERATURE=${DBNAV_SELF_CORRECTION_TEMPERATURE:-0.0}
+    volumes:
+      - ./app:/app
+    depends_on:
+      mssql:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+
 volumes:
   pgdata:
   mssqldata:

@@ -62,6 +62,7 @@ class QueryResult:
     error_type: Optional[str] = None
     error_detail: Optional[str] = None
     latency_ms: int = 0
+    correction_iters: int = 0
 
 
 @dataclass
@@ -77,6 +78,9 @@ class BenchmarkSummary:
     by_category: dict = field(default_factory=dict)
     error_types: dict = field(default_factory=dict)
     elapsed_sec: float = 0.0
+    correction_enabled: bool = False
+    correction_iters_total: int = 0
+    corrected_count: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -456,12 +460,20 @@ class BenchmarkRunner:
         api_key: str,
         schema: str = "bank",
         model: str = "gpt-4o-mini",
+        self_correct: bool = False,
+        correct_iters: int = 2,
+        correct_retry_empty: bool = False,
+        correct_temperature: float = 0.0,
     ):
         self._source = create_engine(source_url)
         self._target = create_engine(target_url)
         self._api_key = api_key
         self._schema = schema
         self._model = model
+        self._self_correct = self_correct
+        self._correct_iters = correct_iters
+        self._correct_retry_empty = correct_retry_empty
+        self._correct_temperature = correct_temperature
 
     def list_benchmarks(self) -> pd.DataFrame:
         with self._target.connect() as conn:
@@ -553,6 +565,28 @@ class BenchmarkRunner:
             for r in rows
         ]
 
+    def _run_correction(self, vn, question_text: str):
+        """Run the execution-guided self-correction loop for one question.
+
+        The loop reuses the benchmark's own executor and T-SQL post-processing,
+        so a corrected query is judged by exactly the same comparison path as a
+        baseline query. Imported lazily so the default benchmark has no new
+        import-time dependency.
+        """
+        from app.pipeline.self_correction import SelfCorrectionLoop
+
+        loop = SelfCorrectionLoop(
+            vn=vn,
+            execute_fn=lambda sql: _execute_sql(self._source, sql),
+            postprocess_fn=_fix_tsql,
+            dialect="mssql",
+            max_iters=self._correct_iters,
+            retry_on_empty=self._correct_retry_empty,
+            repair_temperature=self._correct_temperature,
+            logger=logger,
+        )
+        return loop.run(question_text)
+
     def _evaluate_one(self, vn, question: dict) -> QueryResult:
         qr = QueryResult(
             question_id=question["id"],
@@ -564,17 +598,29 @@ class BenchmarkRunner:
 
         # Generate SQL
         t0 = time.perf_counter()
-        try:
-            sql = vn.generate_sql(question=question["question"])
-            if sql and sql.strip():
-                qr.generated_sql = _fix_tsql(sql)
-        except Exception as e:
-            qr.error_type = "generation_failed"
-            qr.error_detail = str(e)[:200]
+        if self._self_correct:
+            try:
+                cr = self._run_correction(vn, question["question"])
+                qr.generated_sql = cr.final_sql
+                qr.correction_iters = cr.iterations
+            except Exception as e:
+                qr.error_type = "generation_failed"
+                qr.error_detail = str(e)[:200]
+                qr.latency_ms = int((time.perf_counter() - t0) * 1000)
+                return qr
             qr.latency_ms = int((time.perf_counter() - t0) * 1000)
-            return qr
+        else:
+            try:
+                sql = vn.generate_sql(question=question["question"])
+                if sql and sql.strip():
+                    qr.generated_sql = _fix_tsql(sql)
+            except Exception as e:
+                qr.error_type = "generation_failed"
+                qr.error_detail = str(e)[:200]
+                qr.latency_ms = int((time.perf_counter() - t0) * 1000)
+                return qr
 
-        qr.latency_ms = int((time.perf_counter() - t0) * 1000)
+            qr.latency_ms = int((time.perf_counter() - t0) * 1000)
 
         if not qr.generated_sql:
             qr.error_type = "generation_failed"
@@ -678,6 +724,11 @@ class BenchmarkRunner:
             if r.error_type:
                 summary.error_types[r.error_type] = summary.error_types.get(r.error_type, 0) + 1
 
+        # Self-correction stats
+        summary.correction_enabled = self._self_correct
+        summary.correction_iters_total = sum(getattr(r, "correction_iters", 0) for r in results)
+        summary.corrected_count = sum(1 for r in results if getattr(r, "correction_iters", 0) > 0)
+
         return summary
 
 
@@ -693,6 +744,12 @@ def print_summary(summary: BenchmarkSummary):
     print()
     print(f"Overall: {summary.correct}/{summary.total} correct ({summary.accuracy}%)")
     print()
+
+    if summary.correction_enabled:
+        print("Self-correction:")
+        print(f"  queries that triggered a repair: {summary.corrected_count}/{summary.total}")
+        print(f"  total repair iterations: {summary.correction_iters_total}")
+        print()
 
     if summary.by_difficulty:
         print("By difficulty:")
@@ -749,6 +806,14 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int, help="Max questions to run")
     parser.add_argument("--label", help="Run label for logging")
     parser.add_argument("--list", action="store_true", help="List benchmark questions")
+    parser.add_argument("--self-correct", action="store_true",
+                        help="Enable the execution-guided self-correction loop")
+    parser.add_argument("--correct-iters", type=int, default=2,
+                        help="Max repair iterations for self-correction (default 2)")
+    parser.add_argument("--correct-retry-empty", action="store_true",
+                        help="Treat an empty result set as a fault worth repairing")
+    parser.add_argument("--correct-temperature", type=float, default=0.0,
+                        help="Sampling temperature for repair generations (default 0.0)")
     args = parser.parse_args()
 
     # Try config import
@@ -772,6 +837,10 @@ if __name__ == "__main__":
         api_key=key,
         schema=args.schema,
         model=args.model,
+        self_correct=args.self_correct,
+        correct_iters=args.correct_iters,
+        correct_retry_empty=args.correct_retry_empty,
+        correct_temperature=args.correct_temperature,
     )
 
     if args.list:
