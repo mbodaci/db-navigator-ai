@@ -24,6 +24,7 @@ import pandas as pd
 from .flags import PipelineConfig
 from .self_correction import CorrectionResult, CorrectionStep, SelfCorrectionLoop
 from .sql_utils import row_count
+from .voting import SelfConsistencyVoter, VotingResult
 
 
 class FeatureNotEnabledError(RuntimeError):
@@ -73,9 +74,7 @@ class NLToSQLEngine:
         t0 = time.perf_counter()
 
         if cfg.voting:
-            raise FeatureNotEnabledError(
-                "self-consistency voting is not enabled yet; it ships in the next step"
-            )
+            return self._answer_by_voting(question, cfg, t0)
 
         max_iters = cfg.correction_max_iters if cfg.self_correction else 0
         loop = self._build_loop(
@@ -86,6 +85,32 @@ class NLToSQLEngine:
         result = loop.run(question)
         mode = "self_correction" if cfg.self_correction else "baseline"
         return self._to_ask_result(result, mode, t0)
+
+    def _answer_by_voting(self, question: str, cfg: PipelineConfig, t0: float) -> AskResult:
+        voter = SelfConsistencyVoter(
+            vn=self._vn,
+            execute_fn=self._execute,
+            postprocess_fn=self._postprocess,
+            n=cfg.voting_n,
+            temperature=cfg.voting_temperature,
+            logger=self._log,
+        )
+        result = voter.run(question)
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        return AskResult(
+            question=result.question,
+            sql=result.final_sql,
+            executed_ok=result.executed_ok,
+            error=result.error,
+            df=result.df,
+            row_count=row_count(result.df),
+            mode="voting",
+            correction_iterations=0,
+            correction_steps=[],
+            was_corrected=False,
+            latency_ms=latency_ms,
+            confidence=result.confidence,
+        )
 
     def correct(
         self,

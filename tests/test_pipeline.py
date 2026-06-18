@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 from pipeline.engine import FeatureNotEnabledError, NLToSQLEngine
 from pipeline.flags import PipelineConfig
 from pipeline.self_correction import SelfCorrectionLoop
+from pipeline.voting import SelfConsistencyVoter
 from pipeline import sql_utils
 
 
@@ -49,10 +50,12 @@ class FakeVanna:
         self.docs = docs if docs is not None else ["stat_cd ACTIVE means active customer"]
         self.generate_calls = []
         self.submit_temperatures = []
+        self.gen_temperatures = []
         self.extract_inputs = []
 
     def generate_sql(self, question, **kwargs):
         self.generate_calls.append(question)
+        self.gen_temperatures.append(self.temperature)
         return self._gen.pop(0)
 
     def get_related_ddl(self, question):
@@ -88,6 +91,22 @@ class RecordingExecutor:
         if not self._results:
             raise AssertionError("executor called more often than expected")
         return self._results.pop(0)
+
+
+class SqlExecutor:
+    """Executor that returns a fixed ``(df, err)`` for each SQL string.
+
+    Lets voting tests control which candidates land in which result group.
+    """
+
+    def __init__(self, mapping, default=(None, "unknown sql")):
+        self._mapping = mapping
+        self._default = default
+        self.calls = []
+
+    def __call__(self, sql):
+        self.calls.append(sql)
+        return self._mapping.get(sql, self._default)
 
 
 def passthrough(sql):
@@ -260,16 +279,18 @@ def test_engine_self_correction_mode():
     assert res.sql == "SELECT good FROM t"
 
 
-def test_engine_voting_rejected():
-    vn = FakeVanna(gen=["SELECT good FROM t"])
-    ex = RecordingExecutor([(df_rows(), None)])
-    cfg = PipelineConfig(voting=True)
-    raised = False
-    try:
-        make_engine(vn, ex, cfg).answer("q")
-    except FeatureNotEnabledError:
-        raised = True
-    assert raised is True
+def test_engine_voting_mode():
+    df_a = pd.DataFrame({"x": [1]})
+    df_b = pd.DataFrame({"x": [2]})
+    vn = FakeVanna(gen=["SELECT a FROM t", "SELECT a FROM t", "SELECT b FROM t"])
+    ex = SqlExecutor({"SELECT a FROM t": (df_a, None), "SELECT b FROM t": (df_b, None)})
+    cfg = PipelineConfig(voting=True, voting_n=3, voting_temperature=0.7)
+    res = make_engine(vn, ex, cfg).answer("q")
+
+    assert res.mode == "voting"
+    assert res.sql == "SELECT a FROM t"  # 2 of 3 candidates agreed on this result
+    assert res.executed_ok is True
+    assert res.confidence == 2 / 3
 
 
 def test_engine_correct_uses_seed():
@@ -282,6 +303,86 @@ def test_engine_correct_uses_seed():
     assert res.mode == "self_correction"
     assert vn.generate_calls == []
     assert res.executed_ok is True
+
+
+# --------------------------------------------------------------------------- #
+# Self-consistency voting
+# --------------------------------------------------------------------------- #
+DF_A = pd.DataFrame({"x": [1]})
+DF_B = pd.DataFrame({"x": [2]})
+DF_EMPTY = pd.DataFrame()
+
+
+def make_voter(vn, executor, n, temperature=0.7):
+    return SelfConsistencyVoter(
+        vn=vn, execute_fn=executor, postprocess_fn=passthrough, n=n, temperature=temperature
+    )
+
+
+def test_voting_majority_wins():
+    vn = FakeVanna(gen=["SELECT a FROM t", "SELECT a FROM t", "SELECT a FROM t",
+                        "SELECT b FROM t", "SELECT b FROM t"])
+    ex = SqlExecutor({"SELECT a FROM t": (DF_A, None), "SELECT b FROM t": (DF_B, None)})
+    res = make_voter(vn, ex, n=5).run("q")
+
+    assert res.final_sql == "SELECT a FROM t"
+    assert res.winning_votes == 3
+    assert res.n_successful == 5
+    assert res.confidence == 3 / 5
+    assert res.executed_ok is True
+
+
+def test_voting_tie_breaks_toward_nonempty():
+    # 2 empty vs 2 non-empty: a tie that must resolve to the non-empty result.
+    vn = FakeVanna(gen=["SELECT empty FROM t", "SELECT empty FROM t",
+                        "SELECT rows FROM t", "SELECT rows FROM t"])
+    ex = SqlExecutor({"SELECT empty FROM t": (DF_EMPTY, None),
+                      "SELECT rows FROM t": (DF_A, None)})
+    res = make_voter(vn, ex, n=4).run("q")
+
+    assert res.final_sql == "SELECT rows FROM t"
+    assert len(res.df) == 1
+    assert res.winning_votes == 2
+
+
+def test_voting_all_candidates_fail():
+    vn = FakeVanna(gen=["SELECT x FROM t", "SELECT y FROM t", "SELECT z FROM t"])
+    ex = SqlExecutor({}, default=(None, "Invalid column"))
+    res = make_voter(vn, ex, n=3).run("q")
+
+    assert res.executed_ok is False
+    assert res.n_successful == 0
+    assert res.confidence == 0.0
+    assert res.error is not None
+
+
+def test_voting_unanimous_confidence():
+    vn = FakeVanna(gen=["SELECT a FROM t", "SELECT a FROM t", "SELECT a FROM t"])
+    ex = SqlExecutor({"SELECT a FROM t": (DF_A, None)})
+    res = make_voter(vn, ex, n=3).run("q")
+
+    assert res.confidence == 1.0
+    assert res.winning_votes == 3
+
+
+def test_voting_samples_at_voting_temperature():
+    vn = FakeVanna(gen=["SELECT a FROM t", "SELECT a FROM t"])
+    ex = SqlExecutor({"SELECT a FROM t": (DF_A, None)})
+    make_voter(vn, ex, n=2, temperature=0.8).run("q")
+
+    assert vn.gen_temperatures == [0.8, 0.8]  # all samples drawn at the voting temperature
+    assert vn.temperature == 0.7  # restored afterwards
+
+
+def test_voting_non_sql_candidate_excluded():
+    # One candidate is prose; it must not win or crash the vote.
+    vn = FakeVanna(gen=["I cannot answer", "SELECT a FROM t", "SELECT a FROM t"])
+    ex = SqlExecutor({"SELECT a FROM t": (DF_A, None)})
+    res = make_voter(vn, ex, n=3).run("q")
+
+    assert res.final_sql == "SELECT a FROM t"
+    assert res.n_successful == 2
+    assert res.winning_votes == 2
 
 
 # --------------------------------------------------------------------------- #

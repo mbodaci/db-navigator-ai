@@ -63,6 +63,7 @@ class QueryResult:
     error_detail: Optional[str] = None
     latency_ms: int = 0
     correction_iters: int = 0
+    vote_confidence: Optional[float] = None
 
 
 @dataclass
@@ -81,6 +82,9 @@ class BenchmarkSummary:
     correction_enabled: bool = False
     correction_iters_total: int = 0
     corrected_count: int = 0
+    voting_enabled: bool = False
+    voting_n: int = 0
+    mean_confidence: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +468,9 @@ class BenchmarkRunner:
         correct_iters: int = 2,
         correct_retry_empty: bool = False,
         correct_temperature: float = 0.0,
+        voting: bool = False,
+        voting_n: int = 5,
+        voting_temperature: float = 0.7,
     ):
         self._source = create_engine(source_url)
         self._target = create_engine(target_url)
@@ -474,6 +481,9 @@ class BenchmarkRunner:
         self._correct_iters = correct_iters
         self._correct_retry_empty = correct_retry_empty
         self._correct_temperature = correct_temperature
+        self._voting = voting
+        self._voting_n = voting_n
+        self._voting_temperature = voting_temperature
 
     def list_benchmarks(self) -> pd.DataFrame:
         with self._target.connect() as conn:
@@ -587,6 +597,24 @@ class BenchmarkRunner:
         )
         return loop.run(question_text)
 
+    def _run_voting(self, vn, question_text: str):
+        """Run self-consistency voting for one question.
+
+        Reuses the benchmark's executor and T-SQL post-processing so the voted
+        query is judged by the same comparison path as a baseline query.
+        """
+        from app.pipeline.voting import SelfConsistencyVoter
+
+        voter = SelfConsistencyVoter(
+            vn=vn,
+            execute_fn=lambda sql: _execute_sql(self._source, sql),
+            postprocess_fn=_fix_tsql,
+            n=self._voting_n,
+            temperature=self._voting_temperature,
+            logger=logger,
+        )
+        return voter.run(question_text)
+
     def _evaluate_one(self, vn, question: dict) -> QueryResult:
         qr = QueryResult(
             question_id=question["id"],
@@ -598,7 +626,18 @@ class BenchmarkRunner:
 
         # Generate SQL
         t0 = time.perf_counter()
-        if self._self_correct:
+        if self._voting:
+            try:
+                vr = self._run_voting(vn, question["question"])
+                qr.generated_sql = vr.final_sql
+                qr.vote_confidence = vr.confidence
+            except Exception as e:
+                qr.error_type = "generation_failed"
+                qr.error_detail = str(e)[:200]
+                qr.latency_ms = int((time.perf_counter() - t0) * 1000)
+                return qr
+            qr.latency_ms = int((time.perf_counter() - t0) * 1000)
+        elif self._self_correct:
             try:
                 cr = self._run_correction(vn, question["question"])
                 qr.generated_sql = cr.final_sql
@@ -729,6 +768,12 @@ class BenchmarkRunner:
         summary.correction_iters_total = sum(getattr(r, "correction_iters", 0) for r in results)
         summary.corrected_count = sum(1 for r in results if getattr(r, "correction_iters", 0) > 0)
 
+        # Voting stats
+        summary.voting_enabled = self._voting
+        summary.voting_n = self._voting_n
+        confidences = [r.vote_confidence for r in results if r.vote_confidence is not None]
+        summary.mean_confidence = (sum(confidences) / len(confidences)) if confidences else None
+
         return summary
 
 
@@ -749,6 +794,13 @@ def print_summary(summary: BenchmarkSummary):
         print("Self-correction:")
         print(f"  queries that triggered a repair: {summary.corrected_count}/{summary.total}")
         print(f"  total repair iterations: {summary.correction_iters_total}")
+        print()
+
+    if summary.voting_enabled:
+        print("Self-consistency voting:")
+        print(f"  candidates per question: {summary.voting_n}")
+        if summary.mean_confidence is not None:
+            print(f"  mean vote agreement (confidence): {summary.mean_confidence:.2f}")
         print()
 
     if summary.by_difficulty:
@@ -814,11 +866,21 @@ if __name__ == "__main__":
                         help="Treat an empty result set as a fault worth repairing")
     parser.add_argument("--correct-temperature", type=float, default=0.0,
                         help="Sampling temperature for repair generations (default 0.0)")
+    parser.add_argument("--voting", action="store_true",
+                        help="Enable self-consistency voting over multiple candidates")
+    parser.add_argument("--voting-n", type=int, default=5,
+                        help="Number of candidates to sample per question (default 5)")
+    parser.add_argument("--voting-temperature", type=float, default=0.7,
+                        help="Sampling temperature for voting candidates (default 0.7)")
     args = parser.parse_args()
 
-    # Try config import
+    # Try config import (works under `python -m app.evaluation.benchmark`
+    # and when run directly from inside the app/ directory)
     try:
-        from config import SOURCE_DATABASE_URL, DATABASE_URL, OPENAI_API_KEY
+        try:
+            from app.config import SOURCE_DATABASE_URL, DATABASE_URL, OPENAI_API_KEY
+        except ImportError:
+            from config import SOURCE_DATABASE_URL, DATABASE_URL, OPENAI_API_KEY
         source = args.source_url or SOURCE_DATABASE_URL
         target = args.target_url or DATABASE_URL
         key = args.api_key or OPENAI_API_KEY
@@ -841,6 +903,9 @@ if __name__ == "__main__":
         correct_iters=args.correct_iters,
         correct_retry_empty=args.correct_retry_empty,
         correct_temperature=args.correct_temperature,
+        voting=args.voting,
+        voting_n=args.voting_n,
+        voting_temperature=args.voting_temperature,
     )
 
     if args.list:
