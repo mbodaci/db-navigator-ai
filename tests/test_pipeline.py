@@ -252,7 +252,7 @@ def test_repair_temperature_pinned_then_restored():
 # --------------------------------------------------------------------------- #
 # Engine
 # --------------------------------------------------------------------------- #
-def make_engine(vn, executor, config, join_validator=None, value_validator=None):
+def make_engine(vn, executor, config, join_validator=None, value_validator=None, code_glossary=None):
     return NLToSQLEngine(
         vn=vn,
         execute_fn=executor,
@@ -261,6 +261,7 @@ def make_engine(vn, executor, config, join_validator=None, value_validator=None)
         config=config,
         join_validator=join_validator,
         value_validator=value_validator,
+        code_glossary=code_glossary,
     )
 
 
@@ -391,6 +392,27 @@ def test_engine_value_check_without_validator_falls_back():
     ex = RecordingExecutor([(df_rows(), None)])
     res = make_engine(vn, ex, PipelineConfig(value_check=True)).answer("q")
     assert res.mode == "baseline"  # flag on but no validator injected -> baseline path
+
+
+def test_engine_code_glossary_injects_before_question():
+    glossary = "Code dictionary:\n  tbl_acct:\n    stat_cd: OPEN = active account"
+    vn = FakeVanna(gen=["SELECT * FROM bank.tbl_acct WHERE stat_cd = 'OPEN'"])
+    ex = SqlExecutor({"SELECT * FROM bank.tbl_acct WHERE stat_cd = 'OPEN'": (pd.DataFrame({"x": [1]}), None)})
+    res = make_engine(vn, ex, PipelineConfig(code_glossary=True), code_glossary=glossary).answer("how many active accounts")
+
+    assert res.mode == "code_glossary"
+    assert res.was_corrected is False
+    # the glossary text was prepended to the question the model actually saw
+    assert glossary in vn.generate_calls[0]
+    assert "how many active accounts" in vn.generate_calls[0]
+    assert len(vn.generate_calls) == 1  # single generation, no re-prompt
+
+
+def test_engine_code_glossary_without_text_falls_back():
+    vn = FakeVanna(gen=["SELECT good FROM t"])
+    ex = RecordingExecutor([(df_rows(), None)])
+    res = make_engine(vn, ex, PipelineConfig(code_glossary=True)).answer("q")
+    assert res.mode == "baseline"  # flag on but no glossary string injected -> baseline path
 
 
 # --------------------------------------------------------------------------- #

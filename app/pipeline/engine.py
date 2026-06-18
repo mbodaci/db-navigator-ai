@@ -61,6 +61,7 @@ class NLToSQLEngine:
         logger: Optional[logging.Logger] = None,
         join_validator: Optional[JoinValidator] = None,
         value_validator: Optional[ValueValidator] = None,
+        code_glossary: Optional[str] = None,
     ):
         self._vn = vn
         self._execute = execute_fn
@@ -70,6 +71,7 @@ class NLToSQLEngine:
         self._log = logger or logging.getLogger(__name__)
         self._join_validator = join_validator
         self._value_validator = value_validator
+        self._code_glossary = code_glossary
 
     @property
     def config(self) -> PipelineConfig:
@@ -87,6 +89,9 @@ class NLToSQLEngine:
 
         if cfg.value_check and self._value_validator is not None:
             return self._answer_with_value_check(question, cfg, t0)
+
+        if cfg.code_glossary and self._code_glossary:
+            return self._answer_with_glossary(question, cfg, t0)
 
         max_iters = cfg.correction_max_iters if cfg.self_correction else 0
         loop = self._build_loop(
@@ -175,6 +180,26 @@ class NLToSQLEngine:
             correction_iterations=1 if repaired else 0,
             correction_steps=[],
             was_corrected=repaired,
+            latency_ms=latency_ms,
+            confidence=None,
+        )
+
+    def _answer_with_glossary(self, question: str, cfg: PipelineConfig, t0: float) -> AskResult:
+        augmented = f"{self._code_glossary}\n\n{question}"
+        sql = self._postprocess(self._vn.generate_sql(question=augmented))
+        df, err = self._run_sql(sql)
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        return AskResult(
+            question=question,
+            sql=sql,
+            executed_ok=err is None,
+            error=err,
+            df=df,
+            row_count=row_count(df),
+            mode="code_glossary",
+            correction_iterations=0,
+            correction_steps=[],
+            was_corrected=False,
             latency_ms=latency_ms,
             confidence=None,
         )

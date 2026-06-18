@@ -87,6 +87,7 @@ class BenchmarkSummary:
     mean_confidence: Optional[float] = None
     join_paths_enabled: bool = False
     value_check_enabled: bool = False
+    code_glossary_enabled: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -475,6 +476,7 @@ class BenchmarkRunner:
         voting_temperature: float = 0.7,
         join_paths: bool = False,
         value_check: bool = False,
+        code_glossary: bool = False,
     ):
         self._source = create_engine(source_url)
         self._target = create_engine(target_url)
@@ -492,6 +494,8 @@ class BenchmarkRunner:
         self._join_validator = self._build_join_validator() if join_paths else None
         self._value_check = value_check
         self._value_validator = self._build_value_index() if value_check else None
+        self._code_glossary = code_glossary
+        self._glossary_text = self._build_code_glossary() if code_glossary else None
 
     def list_benchmarks(self) -> pd.DataFrame:
         with self._target.connect() as conn:
@@ -699,6 +703,37 @@ class BenchmarkRunner:
                 repaired = True
         return sql, repaired
 
+    def _build_code_glossary(self):
+        """Build the code dictionary that is injected before generation.
+
+        Lookup-backed columns (account/transaction type, loan product) get
+        authoritative names from their lookup tables; bare codes use the
+        hand-authored data dictionary. Restricted to columns that actually
+        exist in enriched_columns. Imported lazily.
+        """
+        from app.pipeline.code_glossary import build_code_glossary, make_lookup_fetch
+
+        with self._target.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT table_name, column_name FROM public.enriched_columns
+                WHERE schema_name = :schema
+            """), {"schema": self._schema}).fetchall()
+        present = {(r[0].casefold(), r[1].casefold()) for r in rows}
+
+        glossary = build_code_glossary(
+            make_lookup_fetch(self._source, self._schema),
+            only_columns=present,
+        )
+        block = glossary.render()
+        logger.info("code glossary built over %d columns (%d chars)", len(glossary), len(block))
+        return block
+
+    def _run_glossary(self, vn, question_text: str):
+        """Prepend the code dictionary to the question, then generate once."""
+        augmented = f"{self._glossary_text}\n\n{question_text}"
+        raw = vn.generate_sql(question=augmented)
+        return _fix_tsql(raw) if raw and raw.strip() else None
+
     def _evaluate_one(self, vn, question: dict) -> QueryResult:
         qr = QueryResult(
             question_id=question["id"],
@@ -737,6 +772,15 @@ class BenchmarkRunner:
                 sql, repaired = self._run_value_check(vn, question["question"])
                 qr.generated_sql = sql
                 qr.correction_iters = 1 if repaired else 0
+            except Exception as e:
+                qr.error_type = "generation_failed"
+                qr.error_detail = str(e)[:200]
+                qr.latency_ms = int((time.perf_counter() - t0) * 1000)
+                return qr
+            qr.latency_ms = int((time.perf_counter() - t0) * 1000)
+        elif self._code_glossary:
+            try:
+                qr.generated_sql = self._run_glossary(vn, question["question"])
             except Exception as e:
                 qr.error_type = "generation_failed"
                 qr.error_detail = str(e)[:200]
@@ -883,6 +927,7 @@ class BenchmarkRunner:
         # Join-path stats (re-uses correction_iters to count join repairs)
         summary.join_paths_enabled = self._join_paths
         summary.value_check_enabled = self._value_check
+        summary.code_glossary_enabled = self._code_glossary
 
         return summary
 
@@ -921,6 +966,10 @@ def print_summary(summary: BenchmarkSummary):
     if summary.value_check_enabled:
         print("Value-domain validation:")
         print(f"  queries re-prompted with the real value domain: {summary.corrected_count}/{summary.total}")
+        print()
+
+    if summary.code_glossary_enabled:
+        print("Code-glossary injection: on (code dictionary prepended to every question)")
         print()
 
     if summary.by_difficulty:
@@ -996,6 +1045,8 @@ if __name__ == "__main__":
                         help="Enable FK join-path validation and repair")
     parser.add_argument("--value-check", action="store_true",
                         help="Enable value-domain validation and repair")
+    parser.add_argument("--code-glossary", action="store_true",
+                        help="Inject the code dictionary into the prompt before generation")
     args = parser.parse_args()
 
     # Try config import (works under `python -m app.evaluation.benchmark`
@@ -1032,6 +1083,7 @@ if __name__ == "__main__":
         voting_temperature=args.voting_temperature,
         join_paths=args.join_paths,
         value_check=args.value_check,
+        code_glossary=args.code_glossary,
     )
 
     if args.list:
