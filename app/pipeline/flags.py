@@ -10,9 +10,10 @@ Environment variables:
     DBNAV_SELF_CORRECTION_ITERS    int    max repair iterations (default 2)
     DBNAV_SELF_CORRECTION_RETRY_EMPTY bool treat an empty result set as a fault
     DBNAV_SELF_CORRECTION_TEMPERATURE float repair sampling temperature (default 0.0)
-    DBNAV_VOTING                   bool   enable self-consistency voting (not yet shipped)
+    DBNAV_VOTING                   bool   enable self-consistency voting
     DBNAV_VOTING_N                 int    candidate count for voting (default 5)
     DBNAV_VOTING_TEMPERATURE       float  candidate sampling temperature (default 0.7)
+    DBNAV_JOIN_PATHS               bool   enable FK join-path validation and repair
 """
 import os
 from dataclasses import dataclass
@@ -61,6 +62,8 @@ class PipelineConfig:
     voting_n: int = 5
     voting_temperature: float = 0.7
 
+    join_paths: bool = False
+
     @classmethod
     def from_env(cls) -> "PipelineConfig":
         return cls(
@@ -71,6 +74,7 @@ class PipelineConfig:
             voting=_env_bool("DBNAV_VOTING", False),
             voting_n=_env_int("DBNAV_VOTING_N", 5),
             voting_temperature=_env_float("DBNAV_VOTING_TEMPERATURE", 0.7),
+            join_paths=_env_bool("DBNAV_JOIN_PATHS", False),
         )
 
     def merged_with(self, **overrides) -> "PipelineConfig":
@@ -88,6 +92,7 @@ class PipelineConfig:
             "voting": self.voting,
             "voting_n": self.voting_n,
             "voting_temperature": self.voting_temperature,
+            "join_paths": self.join_paths,
         }
         for key, value in overrides.items():
             if value is not None and key in data:

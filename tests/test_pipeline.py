@@ -25,6 +25,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 
 from pipeline.engine import FeatureNotEnabledError, NLToSQLEngine
 from pipeline.flags import PipelineConfig
+from pipeline.join_paths import JoinPathEngine, JoinStep
+from pipeline.join_validator import JoinValidator, ValidationResult
 from pipeline.self_correction import SelfCorrectionLoop
 from pipeline.voting import SelfConsistencyVoter
 from pipeline import sql_utils
@@ -248,13 +250,14 @@ def test_repair_temperature_pinned_then_restored():
 # --------------------------------------------------------------------------- #
 # Engine
 # --------------------------------------------------------------------------- #
-def make_engine(vn, executor, config):
+def make_engine(vn, executor, config, join_validator=None):
     return NLToSQLEngine(
         vn=vn,
         execute_fn=executor,
         postprocess_fn=passthrough,
         dialect="mssql",
         config=config,
+        join_validator=join_validator,
     )
 
 
@@ -303,6 +306,43 @@ def test_engine_correct_uses_seed():
     assert res.mode == "self_correction"
     assert vn.generate_calls == []
     assert res.executed_ok is True
+
+
+def test_engine_join_paths_repairs_missing_join():
+    # First generation cross-joins txn and cust; the validator flags it and the
+    # engine re-prompts, the second generation supplies the FK path.
+    good = ("SELECT * FROM tbl_txn JOIN tbl_acct ON tbl_txn.acct_no = tbl_acct.acct_no "
+            "JOIN tbl_cust ON tbl_acct.cust_no = tbl_cust.cust_no")
+    vn = FakeVanna(gen=["SELECT * FROM tbl_txn, tbl_cust", good])
+    ex = SqlExecutor({good: (pd.DataFrame({"x": [1]}), None)})
+    validator = JoinValidator(JoinPathEngine(BANK_FKS))
+    cfg = PipelineConfig(join_paths=True)
+    res = make_engine(vn, ex, cfg, join_validator=validator).answer("q")
+
+    assert res.mode == "join_paths"
+    assert res.was_corrected is True
+    assert res.correction_iterations == 1
+    assert res.sql == good
+    assert res.executed_ok is True
+
+
+def test_engine_join_paths_accepts_valid_join():
+    sql = "SELECT * FROM tbl_txn JOIN tbl_acct ON tbl_txn.acct_no = tbl_acct.acct_no"
+    vn = FakeVanna(gen=[sql])
+    ex = SqlExecutor({sql: (pd.DataFrame({"x": [1]}), None)})
+    validator = JoinValidator(JoinPathEngine(BANK_FKS))
+    res = make_engine(vn, ex, PipelineConfig(join_paths=True), join_validator=validator).answer("q")
+
+    assert res.mode == "join_paths"
+    assert res.was_corrected is False
+    assert res.sql == sql  # no re-prompt: only one generation consumed
+
+
+def test_engine_join_paths_without_validator_falls_back():
+    vn = FakeVanna(gen=["SELECT good FROM t"])
+    ex = RecordingExecutor([(df_rows(), None)])
+    res = make_engine(vn, ex, PipelineConfig(join_paths=True)).answer("q")
+    assert res.mode == "baseline"  # flag on but no validator injected -> baseline path
 
 
 # --------------------------------------------------------------------------- #
@@ -383,6 +423,135 @@ def test_voting_non_sql_candidate_excluded():
     assert res.final_sql == "SELECT a FROM t"
     assert res.n_successful == 2
     assert res.winning_votes == 2
+
+
+# --------------------------------------------------------------------------- #
+# Join-path engine
+# --------------------------------------------------------------------------- #
+# A realistic subset of the bank FK graph (src_table, src_col, tgt_table, tgt_col).
+BANK_FKS = [
+    ("tbl_emp", "br_cd", "tbl_br", "br_cd"),
+    ("tbl_emp", "mgr_emp_no", "tbl_emp", "emp_no"),       # self-reference
+    ("tbl_cust", "br_cd", "tbl_br", "br_cd"),
+    ("tbl_acct", "cust_no", "tbl_cust", "cust_no"),
+    ("tbl_acct", "br_cd", "tbl_br", "br_cd"),
+    ("tbl_txn", "acct_no", "tbl_acct", "acct_no"),
+    ("tbl_loan", "cust_no", "tbl_cust", "cust_no"),
+    ("tbl_loan", "disb_acct_no", "tbl_acct", "acct_no"),  # two FKs to the same table
+    ("tbl_loan", "repay_acct_no", "tbl_acct", "acct_no"),
+]
+
+# Two disconnected components: {txn, acct} and {card, cust}.
+DISCONNECTED_FKS = [
+    ("tbl_txn", "acct_no", "tbl_acct", "acct_no"),
+    ("tbl_card", "cust_no", "tbl_cust", "cust_no"),
+]
+
+
+def test_join_direct_neighbor():
+    steps = JoinPathEngine(BANK_FKS).path("tbl_txn", "tbl_acct")
+    assert len(steps) == 1
+    s = steps[0]
+    assert (s.left_table, s.left_col, s.right_table, s.right_col) == \
+        ("tbl_txn", "acct_no", "tbl_acct", "acct_no")
+
+
+def test_join_two_hops():
+    steps = JoinPathEngine(BANK_FKS).path("tbl_txn", "tbl_cust")
+    assert [(s.left_table, s.left_col, s.right_table, s.right_col) for s in steps] == [
+        ("tbl_txn", "acct_no", "tbl_acct", "acct_no"),
+        ("tbl_acct", "cust_no", "tbl_cust", "cust_no"),
+    ]
+
+
+def test_join_same_table_is_empty():
+    assert JoinPathEngine(BANK_FKS).path("tbl_acct", "tbl_acct") == []
+
+
+def test_join_unknown_table_is_none():
+    assert JoinPathEngine(BANK_FKS).path("tbl_txn", "tbl_does_not_exist") is None
+
+
+def test_join_disconnected_is_none():
+    assert JoinPathEngine(DISCONNECTED_FKS).path("tbl_txn", "tbl_cust") is None
+
+
+def test_join_multi_edge_keeps_alternatives():
+    steps = JoinPathEngine(BANK_FKS).path("tbl_loan", "tbl_acct")
+    assert len(steps) == 1
+    s = steps[0]
+    assert (s.left_col, s.right_col) == ("disb_acct_no", "acct_no")
+    assert s.alternatives == [("repay_acct_no", "acct_no")]
+
+
+def test_join_self_reference():
+    eng = JoinPathEngine(BANK_FKS)
+    assert eng.path("tbl_emp", "tbl_emp") == []  # self-ref is not a path edge
+    sj = eng.self_joins("tbl_emp")
+    assert [(s.left_table, s.left_col, s.right_table, s.right_col) for s in sj] == [
+        ("tbl_emp", "mgr_emp_no", "tbl_emp", "emp_no"),
+    ]
+
+
+def test_join_connect_three_tables():
+    steps = JoinPathEngine(BANK_FKS).connect(["tbl_txn", "tbl_cust", "tbl_br"])
+    tables = {s.left_table for s in steps} | {s.right_table for s in steps}
+    assert tables == {"tbl_txn", "tbl_acct", "tbl_cust", "tbl_br"}
+    assert len(steps) == 3  # four tables connect with three joins (a tree)
+
+
+def test_join_to_sql():
+    eng = JoinPathEngine(BANK_FKS)
+    sql = eng.to_sql("tbl_txn", eng.path("tbl_txn", "tbl_cust"))
+    assert sql == (
+        "tbl_txn JOIN tbl_acct ON tbl_txn.acct_no = tbl_acct.acct_no "
+        "JOIN tbl_cust ON tbl_acct.cust_no = tbl_cust.cust_no"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Join validation (sqlglot)
+# --------------------------------------------------------------------------- #
+def make_validator():
+    return JoinValidator(JoinPathEngine(BANK_FKS))
+
+
+def test_validator_ok_two_table_join():
+    sql = "SELECT * FROM tbl_txn JOIN tbl_acct ON tbl_txn.acct_no = tbl_acct.acct_no"
+    assert make_validator().validate(sql).ok is True
+
+
+def test_validator_ok_with_aliases():
+    sql = "SELECT * FROM tbl_txn t JOIN tbl_acct a ON t.acct_no = a.acct_no"
+    assert make_validator().validate(sql).ok is True
+
+
+def test_validator_ok_single_table():
+    assert make_validator().validate("SELECT * FROM tbl_acct").ok is True
+
+
+def test_validator_ok_where_style_join():
+    # Old-style join expressed in WHERE must not be flagged.
+    sql = "SELECT * FROM tbl_txn t, tbl_acct a WHERE t.acct_no = a.acct_no"
+    assert make_validator().validate(sql).ok is True
+
+
+def test_validator_detects_missing_join():
+    res = make_validator().validate("SELECT * FROM tbl_txn, tbl_cust")
+    assert res.ok is False
+    assert res.reason == "missing_join"
+    assert res.tables == ["tbl_cust", "tbl_txn"]
+
+
+def test_validator_hint_names_intermediate_table():
+    res = make_validator().validate("SELECT * FROM tbl_txn, tbl_cust")
+    assert res.hint is not None
+    assert "tbl_acct" in res.hint  # the FK path routes transactions to customers via accounts
+
+
+def test_validator_unparseable_is_ok():
+    # Cannot analyse -> must not flag (silence beats a false positive).
+    assert make_validator().validate("not valid sql ;;;").ok is True
 
 
 # --------------------------------------------------------------------------- #

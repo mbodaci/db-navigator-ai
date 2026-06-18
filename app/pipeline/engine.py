@@ -22,8 +22,9 @@ from typing import Callable, List, Optional, Tuple
 import pandas as pd
 
 from .flags import PipelineConfig
+from .join_validator import JoinValidator
 from .self_correction import CorrectionResult, CorrectionStep, SelfCorrectionLoop
-from .sql_utils import row_count
+from .sql_utils import looks_like_sql, row_count
 from .voting import SelfConsistencyVoter, VotingResult
 
 
@@ -57,6 +58,7 @@ class NLToSQLEngine:
         dialect: str = "mssql",
         config: Optional[PipelineConfig] = None,
         logger: Optional[logging.Logger] = None,
+        join_validator: Optional[JoinValidator] = None,
     ):
         self._vn = vn
         self._execute = execute_fn
@@ -64,6 +66,7 @@ class NLToSQLEngine:
         self._dialect = dialect
         self._config = config or PipelineConfig()
         self._log = logger or logging.getLogger(__name__)
+        self._join_validator = join_validator
 
     @property
     def config(self) -> PipelineConfig:
@@ -75,6 +78,9 @@ class NLToSQLEngine:
 
         if cfg.voting:
             return self._answer_by_voting(question, cfg, t0)
+
+        if cfg.join_paths and self._join_validator is not None:
+            return self._answer_with_join_paths(question, cfg, t0)
 
         max_iters = cfg.correction_max_iters if cfg.self_correction else 0
         loop = self._build_loop(
@@ -111,6 +117,38 @@ class NLToSQLEngine:
             latency_ms=latency_ms,
             confidence=result.confidence,
         )
+
+    def _answer_with_join_paths(self, question: str, cfg: PipelineConfig, t0: float) -> AskResult:
+        sql = self._postprocess(self._vn.generate_sql(question=question))
+        repaired = False
+        if looks_like_sql(sql):
+            check = self._join_validator.validate(sql)
+            if not check.ok and check.hint:
+                self._log.info("join-path repair (%s); re-prompting with FK path", check.reason)
+                augmented = f"{question}\n\n{check.hint}"
+                sql = self._postprocess(self._vn.generate_sql(question=augmented))
+                repaired = True
+        df, err = self._run_sql(sql)
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        return AskResult(
+            question=question,
+            sql=sql,
+            executed_ok=err is None,
+            error=err,
+            df=df,
+            row_count=row_count(df),
+            mode="join_paths",
+            correction_iterations=1 if repaired else 0,
+            correction_steps=[],
+            was_corrected=repaired,
+            latency_ms=latency_ms,
+            confidence=None,
+        )
+
+    def _run_sql(self, sql: Optional[str]) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
+        if not looks_like_sql(sql):
+            return None, "generation did not return a SQL statement"
+        return self._execute(sql)
 
     def correct(
         self,

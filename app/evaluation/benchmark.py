@@ -85,6 +85,7 @@ class BenchmarkSummary:
     voting_enabled: bool = False
     voting_n: int = 0
     mean_confidence: Optional[float] = None
+    join_paths_enabled: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +472,7 @@ class BenchmarkRunner:
         voting: bool = False,
         voting_n: int = 5,
         voting_temperature: float = 0.7,
+        join_paths: bool = False,
     ):
         self._source = create_engine(source_url)
         self._target = create_engine(target_url)
@@ -484,6 +486,8 @@ class BenchmarkRunner:
         self._voting = voting
         self._voting_n = voting_n
         self._voting_temperature = voting_temperature
+        self._join_paths = join_paths
+        self._join_validator = self._build_join_validator() if join_paths else None
 
     def list_benchmarks(self) -> pd.DataFrame:
         with self._target.connect() as conn:
@@ -615,6 +619,35 @@ class BenchmarkRunner:
         )
         return voter.run(question_text)
 
+    def _build_join_validator(self):
+        """Build a join validator from the validated FK ground-truth graph.
+
+        The runtime validation uses the known-good FK set so the technique is
+        measured in isolation from FK-inference errors. Imported lazily.
+        """
+        from app.enrichment.fk_inference import SYNTHETIC_DB_GROUND_TRUTH
+        from app.pipeline.join_paths import JoinPathEngine
+        from app.pipeline.join_validator import JoinValidator
+
+        return JoinValidator(JoinPathEngine(SYNTHETIC_DB_GROUND_TRUTH), dialect="tsql")
+
+    def _run_join_paths(self, vn, question_text: str):
+        """Generate, validate joins, and re-prompt with the FK path on a miss.
+
+        Returns ``(sql, repaired)``. A single join-repair re-prompt at most.
+        """
+        raw = vn.generate_sql(question=question_text)
+        sql = _fix_tsql(raw) if raw and raw.strip() else None
+        repaired = False
+        if sql and self._join_validator is not None:
+            check = self._join_validator.validate(sql)
+            if not check.ok and check.hint:
+                raw2 = vn.generate_sql(question=f"{question_text}\n\n{check.hint}")
+                if raw2 and raw2.strip():
+                    sql = _fix_tsql(raw2)
+                repaired = True
+        return sql, repaired
+
     def _evaluate_one(self, vn, question: dict) -> QueryResult:
         qr = QueryResult(
             question_id=question["id"],
@@ -631,6 +664,17 @@ class BenchmarkRunner:
                 vr = self._run_voting(vn, question["question"])
                 qr.generated_sql = vr.final_sql
                 qr.vote_confidence = vr.confidence
+            except Exception as e:
+                qr.error_type = "generation_failed"
+                qr.error_detail = str(e)[:200]
+                qr.latency_ms = int((time.perf_counter() - t0) * 1000)
+                return qr
+            qr.latency_ms = int((time.perf_counter() - t0) * 1000)
+        elif self._join_paths:
+            try:
+                sql, repaired = self._run_join_paths(vn, question["question"])
+                qr.generated_sql = sql
+                qr.correction_iters = 1 if repaired else 0
             except Exception as e:
                 qr.error_type = "generation_failed"
                 qr.error_detail = str(e)[:200]
@@ -774,6 +818,9 @@ class BenchmarkRunner:
         confidences = [r.vote_confidence for r in results if r.vote_confidence is not None]
         summary.mean_confidence = (sum(confidences) / len(confidences)) if confidences else None
 
+        # Join-path stats (re-uses correction_iters to count join repairs)
+        summary.join_paths_enabled = self._join_paths
+
         return summary
 
 
@@ -801,6 +848,11 @@ def print_summary(summary: BenchmarkSummary):
         print(f"  candidates per question: {summary.voting_n}")
         if summary.mean_confidence is not None:
             print(f"  mean vote agreement (confidence): {summary.mean_confidence:.2f}")
+        print()
+
+    if summary.join_paths_enabled:
+        print("Join-path validation:")
+        print(f"  queries re-prompted with an FK path: {summary.corrected_count}/{summary.total}")
         print()
 
     if summary.by_difficulty:
@@ -872,6 +924,8 @@ if __name__ == "__main__":
                         help="Number of candidates to sample per question (default 5)")
     parser.add_argument("--voting-temperature", type=float, default=0.7,
                         help="Sampling temperature for voting candidates (default 0.7)")
+    parser.add_argument("--join-paths", action="store_true",
+                        help="Enable FK join-path validation and repair")
     args = parser.parse_args()
 
     # Try config import (works under `python -m app.evaluation.benchmark`
@@ -906,6 +960,7 @@ if __name__ == "__main__":
         voting=args.voting,
         voting_n=args.voting_n,
         voting_temperature=args.voting_temperature,
+        join_paths=args.join_paths,
     )
 
     if args.list:
