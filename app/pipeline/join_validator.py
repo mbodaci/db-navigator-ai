@@ -66,6 +66,26 @@ class JoinValidator:
             hint=self._hint(sorted(tables)),
         )
 
+    def diagnose(self, sql: Optional[str]) -> str:
+        """Explain why the validator would or would not fire on a query.
+
+        Returns one of: 'single_table', 'connected', 'missing_join_flagged',
+        'not_analyzable'. A diagnostic aid for understanding the validator's
+        (in)action across a benchmark run, with no side effects.
+        """
+        info = self._analyze(sql)
+        if info is None:
+            return "not_analyzable"
+        tables, links = info
+        if len(tables) < 2:
+            return "single_table"
+        g = nx.Graph()
+        g.add_nodes_from(tables)
+        for (a, _, b, _) in links:
+            if a in tables and b in tables:
+                g.add_edge(a, b)
+        return "connected" if nx.is_connected(g) else "missing_join_flagged"
+
     def _hint(self, tables: List[str]) -> Optional[str]:
         steps = self._engine.connect(tables)
         if not steps:
