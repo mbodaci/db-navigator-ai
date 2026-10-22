@@ -869,6 +869,16 @@ class BenchmarkRunner:
                 "latency": result.latency_ms,
             })
 
+        # --- CSV export for McNemar (added) ---
+        import csv, os
+        _csv_path = "benchmark_results.csv"
+        _need_header = not os.path.exists(_csv_path)
+        with open(_csv_path, "a", newline="", encoding="utf-8") as _f:
+            _w = csv.writer(_f)
+            if _need_header:
+                _w.writerow(["question_id", "config", "correct"])
+            _w.writerow([result.question_id, config_key, 1 if result.is_correct else 0])
+
     def _build_summary(
         self,
         results: list[QueryResult],

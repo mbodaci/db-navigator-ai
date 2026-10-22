@@ -84,7 +84,6 @@ SYNTHETIC_DB_GROUND_TRUTH: list[tuple[str, str, str, str]] = [
 
 @dataclass
 class FKCandidate:
-    """A candidate foreign key relationship."""
     src_table: str
     src_column: str
     tgt_table: str
@@ -105,11 +104,7 @@ class FKCandidate:
 # ---------------------------------------------------------------------------
 
 class FKInference:
-    """Infers foreign key relationships from an undocumented database.
-
-    Covers subtasks 3.2 (name-based matching), 3.3 (inclusion dependency),
-    and 3.4 (evaluation) from the thesis project plan.
-    """
+    """Infers foreign key relationships from an undocumented database."""
 
     # Confidence scores for different match types
     CONF_EXACT = 0.70       # Column name exactly matches a PK in another table
@@ -625,7 +620,7 @@ class FKInference:
                 (fk_distinct - cand.violation_count) / fk_distinct * 100, 2
             )
         else:
-            cand.inclusion_pct = 100.0  # no data = vacuously true
+            cand.inclusion_pct = 100.0  
 
         if pk_distinct > 0:
             cand.cardinality_ratio = round(fk_distinct / pk_distinct, 4)

@@ -88,11 +88,7 @@ class TableDescription:
 # ---------------------------------------------------------------------------
 
 class DescriptionGenerator:
-    """Generates LLM-based descriptions for tables and columns.
-
-    Covers subtasks 3.5 (table descriptions) and 3.6 (column descriptions)
-    from the thesis project plan.
-    """
+    """Generates LLM-based descriptions for tables and columns."""
 
     DEFAULT_MODEL = "gpt-4o-mini"
     SAMPLE_ROWS = 5

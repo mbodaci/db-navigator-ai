@@ -1,6 +1,5 @@
 -- DB-Navigator AI: Synthetic Bank Database Schema (MS SQL Server)
--- Converted from PostgreSQL. Creates 14 tables in [bank] schema.
--- NO foreign key constraints (deliberate - mimics undocumented MAIB database).
+-- NO foreign key constraints
 
 IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'bank')
     EXEC('CREATE SCHEMA bank');

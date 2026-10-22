@@ -1,11 +1,10 @@
 -- ============================================================
 -- SYNTHETIC BANK DATABASE - Mimics MAIB SQL Server reality
 -- Design principles:
---   1. Cryptic column names (as found in legacy banking systems)
---   2. NO foreign key constraints (relationships exist logically)
---   3. Mixed naming conventions (some tables use prefixes, some don't)
---   4. Status codes as integers and strings (inconsistent)
---   5. 14 tables covering core banking domain
+--   1. Cryptic column names 
+--   2. NO foreign key constraints 
+--   3. Mixed naming conventions 
+--   4. Status codes as integers and strings 
 -- ============================================================
 
 -- Schema: bank (separates synthetic data from app metadata)

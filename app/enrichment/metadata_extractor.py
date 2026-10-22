@@ -101,14 +101,7 @@ class MetadataExtractor:
         source_engine: Optional[Engine] = None,
         target_engine: Optional[Engine] = None,
     ):
-        """Initialize with connection strings for both databases.
-
-        Args:
-            source_url: MS SQL Server connection string (read-only source).
-            target_url: PostgreSQL connection string (app metadata target).
-            source_engine: Optional pre-existing engine for SQL Server.
-            target_engine: Optional pre-existing engine for PostgreSQL.
-        """
+        
         self._source = source_engine or create_engine(source_url)
         self._target = target_engine or create_engine(target_url)
 
@@ -117,11 +110,7 @@ class MetadataExtractor:
     # ------------------------------------------------------------------
 
     def extract(self, schema_name: str) -> tuple[list[TableMeta], list[ColumnMeta]]:
-        """Extract metadata from SQL Server without persisting. For dry runs.
-
-        Returns:
-            Tuple of (table_metadata_list, column_metadata_list).
-        """
+        
         logger.info("Starting metadata extraction for schema '%s'", schema_name)
         t0 = time.perf_counter()
 
@@ -136,11 +125,7 @@ class MetadataExtractor:
         return tables, columns
 
     def run(self, schema_name: str) -> dict:
-        """Extract from SQL Server and persist to PostgreSQL.
-
-        Returns:
-            Summary dict with keys: tables, columns, elapsed_sec.
-        """
+       
         t0 = time.perf_counter()
         tables, columns = self.extract(schema_name)
         self._persist_tables(tables)
@@ -160,11 +145,7 @@ class MetadataExtractor:
     # ------------------------------------------------------------------
 
     def _extract_tables(self, schema_name: str) -> list[TableMeta]:
-        """Extract table-level metadata in batch from SQL Server.
-
-        Uses sys.dm_db_partition_stats for fast row counts (no full scans).
-        Detects primary keys and indexes via sys.indexes.
-        """
+        
         with self._source.connect() as conn:
             # --- 1. Tables + row counts (fast, from partition stats) ---
             rows = conn.execute(text("""
@@ -249,12 +230,7 @@ class MetadataExtractor:
         schema_name: str,
         tables: list[TableMeta],
     ) -> list[ColumnMeta]:
-        """Extract column-level metadata including sample values and stats.
-
-        Uses SQL Server sys.columns + sys.types for base metadata.
-        Computes distinct counts and null counts in a single scan per table.
-        Sample values extracted via TOP N per column.
-        """
+        
         with self._source.connect() as conn:
             # --- 1. Base column metadata (single query for entire schema) ---
             col_rows = conn.execute(text("""
@@ -296,17 +272,14 @@ class MetadataExtractor:
                 col_names = [c[1] for c in cols_for_table]
                 row_count = tbl_meta.row_count
 
-                # -- 2a. Distinct counts + null counts in a single scan --
                 stats = self._extract_column_stats(
                     conn, schema_name, tn, col_names, row_count,
                 )
 
-                # -- 2b. Sample values (batch per table) --
                 samples = self._extract_sample_values(
                     conn, schema_name, tn, col_names,
                 )
 
-                # -- 2c. Assemble ColumnMeta objects --
                 for row in cols_for_table:
                     (_, col_name, ordinal, dtype, nullable,
                      char_len, num_prec, col_default) = row
@@ -408,10 +381,7 @@ class MetadataExtractor:
         col_names: list[str],
         row_count: int,
     ) -> dict[str, dict]:
-        """Per-column fallback for types that don't support COUNT(DISTINCT).
-
-        Slower but handles text/ntext/image/xml columns gracefully.
-        """
+        
         result = {}
         for c in col_names:
             safe = c.replace("]", "]]")
@@ -447,11 +417,7 @@ class MetadataExtractor:
         table_name: str,
         col_names: list[str],
     ) -> dict[str, list[str]]:
-        """Extract up to SAMPLE_LIMIT distinct non-NULL values per column.
-
-        Uses T-SQL: SELECT DISTINCT TOP N CAST([col] AS NVARCHAR(500))
-        Values are cast to NVARCHAR for uniform storage.
-        """
+        
         samples: dict[str, list[str]] = {}
 
         for c in col_names:
@@ -479,7 +445,6 @@ class MetadataExtractor:
     # ------------------------------------------------------------------
 
     def _persist_tables(self, tables: list[TableMeta]) -> None:
-        """UPSERT table metadata into PostgreSQL public.enriched_tables."""
         if not tables:
             return
 
@@ -509,7 +474,6 @@ class MetadataExtractor:
         logger.info("Persisted %d table records to enriched_tables", len(tables))
 
     def _persist_columns(self, columns: list[ColumnMeta]) -> None:
-        """UPSERT column metadata into PostgreSQL public.enriched_columns."""
         if not columns:
             return
 
@@ -549,7 +513,6 @@ class MetadataExtractor:
     # ------------------------------------------------------------------
 
     def summary(self, schema_name: str) -> str:
-        """Return a human-readable summary of extracted metadata."""
         tables, columns = self.extract(schema_name)
 
         lines = [
@@ -583,11 +546,7 @@ class MetadataExtractor:
         return "\n".join(lines)
 
     def format_for_vanna(self, schema_name: str) -> list[str]:
-        """Generate documentation strings suitable for Vanna.ai training.
-
-        Each string describes one table with its columns, types, and sample
-        values - the exact format that addresses value mapping failures.
-        """
+        
         tables, columns = self.extract(schema_name)
         docs = []
 
@@ -620,10 +579,7 @@ class MetadataExtractor:
         return docs
 
     def format_ddl_for_vanna(self, schema_name: str) -> list[str]:
-        """Generate T-SQL DDL strings for Vanna training.
-
-        Reconstructs CREATE TABLE statements from sys.columns metadata.
-        """
+        
         tables, columns = self.extract(schema_name)
         ddls = []
 

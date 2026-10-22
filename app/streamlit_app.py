@@ -18,6 +18,9 @@ from vanna.chromadb import ChromaDB_VectorStore
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from upload.streamlit_upload import (
+    render_upload_section, get_active_vanna, get_active_engine, is_upload_active,
+)
 from config import (
     SOURCE_DATABASE_URL, DATABASE_URL, OPENAI_API_KEY, BANK_SCHEMA,
 )
@@ -29,12 +32,63 @@ logger = logging.getLogger(__name__)
 # --- Page config ---
 st.set_page_config(
     page_title="DB-Navigator AI",
-    page_icon="🧭",
     layout="wide",
 )
 
-st.title("DB-Navigator AI")
-st.caption("Ask questions about the bank database in natural language.")
+st.markdown(
+    """
+    <style>
+      :root { --navy:#14213d; --orange:#fca311; --grey:#e5e5e5; --ink:#000000; }
+      #MainMenu {visibility:hidden;}
+      footer {visibility:hidden;}
+      [data-testid="stToolbar"] {display:none;}
+      [data-testid="stDecoration"] {display:none;}
+      [data-testid="stStatusWidget"] {display:none;}
+      .block-container { padding-top:2.2rem; max-width:1120px; }
+      .dbnav-hero {
+        background:var(--navy); border-radius:14px; padding:24px 30px;
+        margin-bottom:14px; border-left:6px solid var(--orange);
+      }
+      .dbnav-hero h1 { color:#ffffff; margin:0; font-size:1.95rem; font-weight:700; letter-spacing:.3px; }
+      .dbnav-hero p { color:var(--grey); margin:.45rem 0 0; font-size:1.02rem; }
+      .dbnav-accent { color:var(--orange); }
+      .dbnav-pipe {
+        display:flex; flex-wrap:wrap; gap:.45rem; align-items:center;
+        margin:0 2px 20px; color:var(--navy); font-size:.8rem; font-weight:600;
+      }
+      .dbnav-pipe .step { background:#ffffff; border:1px solid var(--grey); border-radius:20px; padding:3px 12px; }
+      .dbnav-pipe .arrow { color:var(--orange); font-weight:800; }
+      .stButton > button {
+        border:1.5px solid var(--navy); color:var(--navy); background:#ffffff;
+        border-radius:10px; font-weight:600; transition:all .15s ease;
+      }
+      .stButton > button:hover { background:var(--navy); color:#ffffff; border-color:var(--navy); }
+      [data-testid="stSidebar"] { border-right:3px solid var(--orange); }
+      [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 { color:var(--navy); }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    '<div class="dbnav-hero">'
+    '<h1>DB-Navigator <span class="dbnav-accent">AI</span></h1>'
+    '<p>Pune orice întrebare despre baza de date a băncii în limbaj natural - sistemul scrie și execută automat interogarea SQL.</p>'
+    '</div>',
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    '<div class="dbnav-pipe">'
+    '<span class="step">Limbaj natural</span><span class="arrow">&#8594;</span>'
+    '<span class="step">Regăsire pe baza schemei (RAG)</span><span class="arrow">&#8594;</span>'
+    '<span class="step">GPT-4o-mini</span><span class="arrow">&#8594;</span>'
+    '<span class="step">T-SQL</span><span class="arrow">&#8594;</span>'
+    '<span class="step">SQL Server</span><span class="arrow">&#8594;</span>'
+    '<span class="step">Rezultate</span>'
+    '</div>',
+    unsafe_allow_html=True,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -320,22 +374,23 @@ try:
     source_engine = get_source_engine()
     train_vanna_if_needed(vn)
 except Exception as e:
-    st.error(f"Initialization error: {e}")
-    st.info("Make sure Docker containers are running and OPENAI_API_KEY is set in .env")
+    st.error(f"Eroare de inițializare: {e}")
+    st.info("Asigură-te că rulează containerele Docker și că OPENAI_API_KEY este setat în .env")
     st.stop()
 
 # Chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display chat history
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        if "sql" in msg:
-            st.code(msg["sql"], language="sql")
-        if "df" in msg and msg["df"] is not None:
-            st.dataframe(msg["df"], use_container_width=True)
+# Example questions (shown only before the first question, so a demo can start
+# with a click instead of typing live).
+EXAMPLE_QUESTIONS = [
+    "Arată toți clienții activi",
+    "Care sunt primele 5 conturi după soldul curent?",
+    "Câte conturi are fiecare client?",
+    "Care este portofoliul total de credite pe categorii de produse?",
+]
+
 
 def fix_tsql_syntax(sql: str) -> str:
     """Post-process generated SQL to fix common T-SQL syntax issues."""
@@ -349,76 +404,206 @@ def fix_tsql_syntax(sql: str) -> str:
             sql += ';'
     return sql
 
-# Chat input
-if prompt := st.chat_input("Ask a question about the bank database..."):
-    # Show user message
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
 
-    # Generate and execute SQL
-    with st.chat_message("assistant"):
-        with st.spinner("Generating SQL..."):
-            try:
-                sql = fix_tsql_syntax(vn.generate_sql(question=prompt))
-                st.code(sql, language="sql")
+def fix_standard_syntax(sql: str) -> str:
+    """Convert T-SQL artifacts to standard SQL for uploaded SQLite/PostgreSQL DBs.
 
-                # Execute against SQL Server
-                with source_engine.connect() as conn:
-                    df = pd.read_sql(text(sql), conn)
+    The model sometimes emits 'SELECT TOP N ...' (learned from the bank DB's
+    T-SQL documentation) even for an uploaded database. Rewrite it to the
+    standard 'SELECT ... LIMIT N' that SQLite and PostgreSQL expect.
+    """
+    import re
+    match = re.search(r'^\s*SELECT\s+TOP\s+(\d+)\b', sql, re.IGNORECASE)
+    if match:
+        n = match.group(1)
+        sql = re.sub(r'^(\s*SELECT)\s+TOP\s+\d+\b', r'\1', sql, count=1, flags=re.IGNORECASE).strip()
+        sql = sql.rstrip(';').rstrip()
+        sql = f"{sql} LIMIT {n}"
+    return sql
 
-                if len(df) == 0:
-                    st.info("Query returned no results.")
-                    result_msg = {
-                        "role": "assistant",
-                        "content": "Query executed successfully but returned no results.",
-                        "sql": sql,
-                        "df": None,
-                    }
-                else:
-                    st.success(f"Returned {len(df)} rows")
-                    st.dataframe(df, use_container_width=True)
-                    result_msg = {
-                        "role": "assistant",
-                        "content": f"Returned {len(df)} rows",
-                        "sql": sql,
-                        "df": df,
-                    }
 
-            except Exception as e:
-                st.error(f"Error: {e}")
-                result_msg = {
+def _save_feedback(msg: dict, rating: str, comment: str) -> None:
+    """Persist a user's rating of a generated query to Postgres.
+
+    Best-effort: any failure is logged and swallowed so feedback can never
+    break the demo.
+    """
+    try:
+        engine = get_target_engine()
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS public.user_feedback ("
+                "id SERIAL PRIMARY KEY, "
+                "created_at TIMESTAMP DEFAULT now(), "
+                "question TEXT, generated_sql TEXT, rating TEXT, comment TEXT)"
+            ))
+            conn.execute(
+                text(
+                    "INSERT INTO public.user_feedback "
+                    "(question, generated_sql, rating, comment) "
+                    "VALUES (:q, :s, :r, :c)"
+                ),
+                {
+                    "q": msg.get("question"),
+                    "s": msg.get("sql"),
+                    "r": rating,
+                    "c": comment,
+                },
+            )
+    except Exception as exc:
+        logger.warning("Could not save feedback: %s", exc)
+
+
+def render_feedback(idx: int, msg: dict) -> None:
+    """Like / dislike controls under an assistant answer.
+
+    'Greșit' opens a free-text box so the user can describe what was missed
+    (required tables, columns, filters, wrong values). State is kept per
+    message in st.session_state so it survives reruns.
+    """
+    state = st.session_state.get(f"fb_{idx}", "none")
+    if state == "good":
+        st.caption("Notat ca util. Mulțumim pentru feedback.")
+        return
+    if state == "done":
+        st.caption("Feedback trimis. Mulțumim.")
+        return
+    if state == "bad_open":
+        note = st.text_area(
+            "Ce a lipsit sau ce a greșit? (ex: tabele/coloane necesare, filtre, valori)",
+            key=f"fb_note_{idx}",
+            placeholder="Detalii opționale...",
+        )
+        b1, b2, _ = st.columns([1, 1, 5])
+        if b1.button("Trimite", key=f"fb_submit_{idx}"):
+            _save_feedback(msg, "negativ", note)
+            st.session_state[f"fb_{idx}"] = "done"
+            st.rerun()
+        if b2.button("Anulează", key=f"fb_cancel_{idx}"):
+            st.session_state[f"fb_{idx}"] = "none"
+            st.rerun()
+        return
+    c1, c2, _ = st.columns([1, 1, 6])
+    if c1.button("Util", key=f"fb_good_{idx}"):
+        _save_feedback(msg, "pozitiv", "")
+        st.session_state[f"fb_{idx}"] = "good"
+        st.rerun()
+    if c2.button("Greșit", key=f"fb_bad_{idx}"):
+        st.session_state[f"fb_{idx}"] = "bad_open"
+        st.rerun()
+
+
+def render_message(idx: int, msg: dict) -> None:
+    """Render one chat message; assistant answers also get feedback controls."""
+    with st.chat_message(msg["role"]):
+        if msg["role"] == "user":
+            st.markdown(msg["content"])
+            return
+        if msg.get("sql"):
+            st.code(msg["sql"], language="sql")
+        if msg.get("df") is not None:
+            st.dataframe(msg["df"], use_container_width=True)
+            st.caption(msg["content"])
+        else:
+            st.markdown(msg["content"])
+        if msg.get("sql"):
+            render_feedback(idx, msg)
+
+
+# Example chips: only before the first question, and not on the rerun that is
+# about to process a clicked example (dbnav_pending is set then) - otherwise the
+# list would linger above the first answer.
+if not st.session_state.messages and "dbnav_pending" not in st.session_state:
+    st.markdown("###### Încearcă un exemplu")
+    _ex_cols = st.columns(2)
+    for _i, _ex in enumerate(EXAMPLE_QUESTIONS):
+        if _ex_cols[_i % 2].button(_ex, key=f"dbnav_example_{_i}", use_container_width=True):
+            st.session_state.dbnav_pending = _ex
+            st.rerun()
+
+# Render the existing conversation
+for _idx, _msg in enumerate(st.session_state.messages):
+    render_message(_idx, _msg)
+
+# Chat input (typed) or a clicked example question
+_typed = st.chat_input("Pune o întrebare despre baza de date a băncii...")
+question = _typed or st.session_state.pop("dbnav_pending", None)
+if question:
+    user_msg = {"role": "user", "content": question}
+    st.session_state.messages.append(user_msg)
+    render_message(len(st.session_state.messages) - 1, user_msg)
+
+    with st.spinner("Se generează interogarea SQL..."):
+        try:
+            # Route through the uploaded database if one is active,
+            # otherwise use the default synthetic bank database.
+            active_vn = get_active_vanna(vn)
+            active_engine = get_active_engine(source_engine)
+
+            raw_sql = active_vn.generate_sql(question=question)
+            # Default bank DB (SQL Server): convert LIMIT -> TOP.
+            # Uploaded SQLite/PostgreSQL DB: convert any stray TOP -> LIMIT.
+            if is_upload_active():
+                sql = fix_standard_syntax(raw_sql)
+            else:
+                sql = fix_tsql_syntax(raw_sql)
+
+            with active_engine.connect() as conn:
+                df = pd.read_sql(text(sql), conn)
+
+            if len(df) == 0:
+                assistant_msg = {
                     "role": "assistant",
-                    "content": f"Error: {e}",
-                    "sql": sql if "sql" in dir() else None,
+                    "content": "Interogarea s-a executat cu succes, dar nu a returnat rezultate.",
+                    "sql": sql,
+                    "df": None,
+                    "question": question,
                 }
+            else:
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": f"S-au returnat {len(df)} rânduri",
+                    "sql": sql,
+                    "df": df,
+                    "question": question,
+                }
+        except Exception as e:
+            assistant_msg = {
+                "role": "assistant",
+                "content": f"Eroare: {e}",
+                "sql": sql if "sql" in dir() else None,
+                "question": question,
+            }
 
-        st.session_state.messages.append(result_msg)
+    st.session_state.messages.append(assistant_msg)
+    render_message(len(st.session_state.messages) - 1, assistant_msg)
 
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
-    st.header("About")
+    st.header("Despre")
     st.markdown("""
-    **DB-Navigator AI** generates SQL from natural language
-    questions using RAG-powered LLMs.
+    **DB-Navigator AI** generează interogări SQL din întrebări
+    în limbaj natural, folosind modele LLM cu RAG.
 
-    Built for ASE Bucharest undergraduate thesis.
+    Realizat pentru lucrarea de licență, ASE București.
     """)
 
-    st.header("Training Data")
+    st.header("Date de antrenament")
     try:
         td = vn.get_training_data()
         if td is not None:
-            st.metric("DDL entries", len(td[td["training_data_type"] == "ddl"]))
-            st.metric("Documentation", len(td[td["training_data_type"] == "documentation"]))
-            st.metric("SQL examples", len(td[td["training_data_type"] == "sql"]))
+            st.metric("Intrări DDL", len(td[td["training_data_type"] == "ddl"]))
+            st.metric("Documentație", len(td[td["training_data_type"] == "documentation"]))
+            st.metric("Exemple SQL", len(td[td["training_data_type"] == "sql"]))
     except Exception:
-        st.caption("Training data not yet loaded")
+        st.caption("Datele de antrenament nu sunt încă încărcate")
 
-    st.header("System Info")
-    st.caption(f"Schema: {BANK_SCHEMA}")
-    st.caption("Source: MS SQL Server")
+    st.header("Informații sistem")
+    st.caption(f"Schemă: {BANK_SCHEMA}")
+    st.caption("Sursă: MS SQL Server")
     st.caption("LLM: GPT-4o-mini")
+    st.divider()
+    render_upload_section()
